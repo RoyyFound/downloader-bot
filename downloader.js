@@ -182,7 +182,13 @@ async function fetchTikwm(tiktokUrl) {
     const res = await fetch(api, { signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
     if (!res.ok) throw new Error('tikwm HTTP ' + res.status);
     const j = await res.json();
-    if (j.code !== 0 || !j.data || !j.data.play) throw new Error('tikwm: ' + (j.msg || 'tidak ada link video'));
+    if (j.code !== 0 || !j.data || !j.data.play) {
+      const msg = j.msg || 'tidak ada link video';
+      // Limit harian gratis tikwm (10.000 req/hari, dipake bareng semua orang)
+      // habis — tandai khusus biar pesan ke user beda dari "video privat".
+      if (/limit/i.test(msg)) throw new Error('TIKWM_LIMIT: ' + msg);
+      throw new Error('tikwm: ' + msg);
+    }
     const d = j.data;
     const size = d.size || 0;
     // musik latar video (mp3 langsung) — buat tombol MP3.
