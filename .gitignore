@@ -1,0 +1,10 @@
+node_modules/
+.env
+.env.*
+bot.log
+tmp_dl/
+miniapp_queue/
+users.json
+stats.json
+*.bak
+*.bak-*
