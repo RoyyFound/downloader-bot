@@ -10,7 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+# npm install (bukan npm ci — npm ci pernah gagal di Altare)
+RUN npm install --omit=dev
 
 COPY bot.js downloader.js ./
 
