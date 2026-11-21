@@ -179,8 +179,14 @@ async function fetchTikwm(tiktokUrl) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 15000);
   try {
-    const res = await fetch(api, { signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
-    if (!res.ok) throw new Error('tikwm HTTP ' + res.status);
+    let res;
+    try {
+      res = await fetch(api, { signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
+    } catch (e) {
+      // Jaringan ke tikwm gagal (timeout / putus) — servernya lagi down.
+      throw new Error('TIKWM_DOWN: ' + (e.message || 'jaringan gagal'));
+    }
+    if (!res.ok) throw new Error('TIKWM_DOWN: tikwm HTTP ' + res.status);
     const j = await res.json();
     if (j.code !== 0 || !j.data || !j.data.play) {
       const msg = j.msg || 'tidak ada link video';
