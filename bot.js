@@ -175,6 +175,7 @@ async function handleDownload(chatId, url, format, statusMsgId) {
   // ===== MP4 (video, jalur lama) =====
   let d = null;
   let tikwmLimited = false; // API TikTok (tikwm) kena limit harian — pesannya beda
+  let tikwmDown = false; // API TikTok lagi down/error — pesannya beda
   // TikTok: coba API tikwm dulu (yt-dlp sering gagal karena IP HP diblokir).
   if (plat === 'tiktok') {
     try {
@@ -183,6 +184,7 @@ async function handleDownload(chatId, url, format, statusMsgId) {
     } catch (e) {
       console.log('TT_API_FAIL chat=' + chatId + ' err=' + e.message);
       if (String(e.message || '').startsWith('TIKWM_LIMIT')) tikwmLimited = true;
+      if (String(e.message || '').startsWith('TIKWM_DOWN')) tikwmDown = true;
     }
   }
   if (!d) {
@@ -231,6 +233,8 @@ async function handleDownload(chatId, url, format, statusMsgId) {
     console.log('DL_FAIL chat=' + chatId + ' ms=' + (Date.now() - t0) + ' err=' + e.message);
     if (tikwmLimited) {
       await fail('❌ API TikTok lagi kena limit harian (jatah gratis 10.000/hari, dipake bareng). Limit reset tiap jam 07:00 WIB — coba lagi besok pagi. YouTube/Instagram tetap jalan.');
+    } else if (tikwmDown) {
+      await fail('❌ Server API TikTok (tikwm) lagi down/error, bukan salah link kamu. Coba lagi nanti. YouTube/Instagram tetap jalan.');
     } else {
       await fail('❌ Gagal ambil video. Coba link lain, atau pastikan videonya publik (bukan privat/login-only).');
     }
