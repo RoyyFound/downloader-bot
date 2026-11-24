@@ -6,8 +6,10 @@
 // platform JUJUR apa adanya, bukan dipaksa genap 10.
 //
 // Terverifikasi jalan (24 Nov 2026):
-//   YouTube: yt-dlp client web (kadang kena bot-check), yt-dlp client android
-//     (extract + download file Shorts OK, 5,68MB ffprobe OK), android+skipweb.
+//   YouTube: yt-dlp client android (extract + download file Shorts OK, 5,68MB
+//     ffprobe OK), android+skipweb. Client web MATI kena bot-check (gagal 3/3
+//     di load test 24 Nov, buang ~24 dtk) — sejak 24 Nov android JADI PERTAMA,
+//     web cuma fallback (tetap ada, bisa pulih).
 //   TikTok: tikwm API (code 0 + play URL bisa di-GET, mp4), yt-dlp extract +
 //     download (616KB ffprobe OK), ssstik -> tikcdn (GET 200, ftyp mp4).
 //   Instagram: yt-dlp extract + download (677KB ffprobe OK).
@@ -49,11 +51,11 @@ function logRoute(route, platform, ok, err) {
 // Jalur video. Tiap route mengembalikan { mode: 'url'|'file', url?, file?, size, title, tooBig? }.
 const VIDEO_ROUTES = {
   youtube: [
-    { id: 'ytdlp-web-direct', run: async (url) => { const d = await extractDirect(url); return { mode: 'url', ...d }; } },
     { id: 'ytdlp-android-direct', run: async (url) => { const d = await extractDirectClient(url, 'android'); return { mode: 'url', ...d }; } },
     { id: 'ytdlp-android-file', run: async (url, chatId) => { const d = await downloadFileClient(url, chatId, 'android'); return { mode: 'file', ...d, title: '' }; } },
-    { id: 'ytdlp-web-file', run: async (url, chatId) => { const d = await downloadFile(url, chatId); return { mode: 'file', ...d, title: '' }; } },
     { id: 'ytdlp-android-skipweb-direct', run: async (url) => { const d = await extractDirectClient(url, 'android-skipweb'); return { mode: 'url', ...d }; } },
+    { id: 'ytdlp-web-direct', run: async (url) => { const d = await extractDirect(url); return { mode: 'url', ...d }; } },
+    { id: 'ytdlp-web-file', run: async (url, chatId) => { const d = await downloadFile(url, chatId); return { mode: 'file', ...d, title: '' }; } },
     { id: 'cobalt-video', gated: true, run: async (url) => { const d = await cobaltFetch(url, false); return { mode: 'url', ...d }; } },
   ],
   tiktok: [
@@ -72,8 +74,8 @@ const VIDEO_ROUTES = {
 // Jalur audio (MP3). Hasil selalu file lokal.
 const AUDIO_ROUTES = {
   youtube: [
-    { id: 'ytdlp-web-audio', run: async (url, chatId) => { const info = await extractAudioInfo(url); const f = await downloadAudioFile(url, chatId); return { ...f, performer: info.uploader || '', duration: info.duration || 0 }; } },
     { id: 'ytdlp-android-audio', run: async (url, chatId) => { const info = await extractAudioInfoClient(url, 'android'); const f = await downloadAudioFileClient(url, chatId, null, 'android'); return { ...f, performer: info.uploader || '', duration: info.duration || 0 }; } },
+    { id: 'ytdlp-web-audio', run: async (url, chatId) => { const info = await extractAudioInfo(url); const f = await downloadAudioFile(url, chatId); return { ...f, performer: info.uploader || '', duration: info.duration || 0 }; } },
     { id: 'cobalt-audio', gated: true, run: async (url, chatId) => { const d = await cobaltFetch(url, true); const f = await downloadAudioUrlFile(d.url, chatId, 'audio'); return { ...f, performer: '', duration: 0 }; } },
   ],
   tiktok: [
@@ -82,8 +84,8 @@ const AUDIO_ROUTES = {
     { id: 'ytdlp-android-audio', run: async (url, chatId) => { const info = await extractAudioInfoClient(url, 'android'); const f = await downloadAudioFileClient(url, chatId, null, 'android'); return { ...f, performer: info.uploader || '', duration: info.duration || 0 }; } },
   ],
   instagram: [
-    { id: 'ytdlp-web-audio', run: async (url, chatId) => { const info = await extractAudioInfo(url); const f = await downloadAudioFile(url, chatId); return { ...f, performer: info.uploader || '', duration: info.duration || 0 }; } },
     { id: 'ytdlp-android-audio', run: async (url, chatId) => { const info = await extractAudioInfoClient(url, 'android'); const f = await downloadAudioFileClient(url, chatId, null, 'android'); return { ...f, performer: info.uploader || '', duration: info.duration || 0 }; } },
+    { id: 'ytdlp-web-audio', run: async (url, chatId) => { const info = await extractAudioInfo(url); const f = await downloadAudioFile(url, chatId); return { ...f, performer: info.uploader || '', duration: info.duration || 0 }; } },
     { id: 'cobalt-audio', gated: true, run: async (url, chatId) => { const d = await cobaltFetch(url, true); const f = await downloadAudioUrlFile(d.url, chatId, 'audio'); return { ...f, performer: '', duration: 0 }; } },
   ],
 };
