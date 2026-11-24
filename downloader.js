@@ -91,6 +91,38 @@ function downloadFile(url, chatId) {
   });
 }
 
+// ---------- validasi URL video SEBELUM dikirim ke Telegram ----------
+// Bug Nekogram 24 Nov: URL hasil extract kadang BUKAN video — yt-dlp
+// extract URL TikTok yang dibalas 403 HTML oleh CDN, ssstik ambil link
+// thumbnail JPEG. Telegram tidak memvalidasi konten saat sendVideo by URL:
+// dia simpan apa pun yang diunduh, lalu klien gagal memutarnya ("App was
+// unable to play this video"). Validasi murah: 1 HEAD request — status 200,
+// content-type video (atau octet-stream), ukuran wajar. Gagal validasi =
+// jalur dianggap gagal, rantai lanjut ke jalur berikutnya.
+async function validateVideoUrl(url) {
+  let res;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    try {
+      res = await fetch(url, {
+        method: 'HEAD', signal: ctrl.signal,
+        headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36' },
+      });
+    } finally { clearTimeout(timer); }
+  } catch (e) {
+    return { ok: false, reason: 'validasi gagal: ' + (e.message || 'jaringan') };
+  }
+  if (!res.ok) return { ok: false, reason: 'URL video HTTP ' + res.status };
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+  if (ct && (ct.startsWith('text/') || ct.startsWith('image/') || ct.includes('json') || ct.includes('xml'))) {
+    return { ok: false, reason: 'URL video bukan video (content-type: ' + ct + ')' };
+  }
+  const len = Number(res.headers.get('content-length') || 0);
+  if (len && len < 10000) return { ok: false, reason: 'URL video terlalu kecil (' + len + ' byte)' };
+  return { ok: true };
+}
+
 // Unduh file video langsung dari URL (pakai curl) — buat link CDN hasil
 // tikwm, yang tidak bisa diunduh yt-dlp dengan selector format biasa.
 function downloadUrlFile(url, chatId) {
@@ -105,6 +137,13 @@ function downloadUrlFile(url, chatId) {
       if (!fs.existsSync(file)) return reject(new Error('download gagal: file tidak ketemu'));
       const size = fs.statSync(file).size;
       if (size < 10000) return reject(new Error('download gagal: file terlalu kecil (' + size + ' byte)'));
+      // Cek magic bytes mp4 (ftyp di offset 4) — cegah halaman error HTML /
+      // gambar JPEG kesimpen sebagai .mp4 (bug Nekogram 24 Nov).
+      const head = fs.readFileSync(file).slice(0, 12);
+      if (head.length < 12 || head.toString('ascii', 4, 8) !== 'ftyp') {
+        try { fs.unlinkSync(file); } catch (_) {}
+        return reject(new Error('download gagal: file bukan video mp4'));
+      }
       resolve({ file, size });
     });
   });
@@ -456,9 +495,16 @@ async function fetchSsstik(tiktokUrl) {
     if (!res.ok) throw new Error('ssstik HTTP ' + res.status);
     const html = await res.text();
     if (/cloudflare|attention required|just a moment/i.test(html)) throw new Error('ssstik kena Cloudflare');
-    const m = html.match(/https?:\/\/tikcdn\.io\/ssstik\/[^\s"'<>]+/);
-    if (!m) throw new Error('ssstik: link download tidak ketemu');
-    return { url: m[0], size: 0, title: '', tooBig: false, via: 'ssstik' };
+    const all = html.match(/https?:\/\/tikcdn\.io\/ssstik\/[^\s"'<>]+/g) || [];
+    // Pilih link VIDEO: /v/ dulu, lalu /ssstik/<id> polos. Regex lama ambil
+    // match pertama — itu poster JPEG (/p/) (bug Nekogram 24 Nov: "video"
+    // yang dikirim ternyata gambar 240x320). /p/ = poster, /a/ = avatar,
+    // /m/ = musik — ketiganya BUKAN video.
+    const pick = all.find((u) => /\/ssstik\/v\//.test(u))
+      || all.find((u) => /\/ssstik\/\d+\?/.test(u))
+      || all.find((u) => !/\/(p|a|m)\//.test(u));
+    if (!pick) throw new Error('ssstik: link video tidak ketemu');
+    return { url: pick, size: 0, title: '', tooBig: false, via: 'ssstik' };
   } finally { clearTimeout(timer); }
 }
 
@@ -471,4 +517,4 @@ function validateCdnUrl(url) {
   return u.toString();
 }
 
-module.exports = { extractDirect, downloadFile, downloadUrlFile, extractAudioInfo, downloadAudioFile, downloadAudioUrlFile, fetchTikwm, fetchSpotifyMeta, isSpotifyUrl, checkYtDlp, isVideoUrl, platformOf, MAX_BYTES, validateMediaUrl, safeJoin, extractDirectClient, downloadFileClient, extractAudioInfoClient, downloadAudioFileClient, cobaltFetch, fetchSsstik, validateCdnUrl, YTDLP_BIN: YTDLP };
+module.exports = { extractDirect, downloadFile, downloadUrlFile, extractAudioInfo, downloadAudioFile, downloadAudioUrlFile, fetchTikwm, fetchSpotifyMeta, isSpotifyUrl, checkYtDlp, isVideoUrl, platformOf, MAX_BYTES, validateMediaUrl, safeJoin, extractDirectClient, downloadFileClient, extractAudioInfoClient, downloadAudioFileClient, cobaltFetch, fetchSsstik, validateCdnUrl, validateVideoUrl, YTDLP_BIN: YTDLP };

@@ -12,8 +12,24 @@
 //     web cuma fallback (tetap ada, bisa pulih).
 //   TikTok: tikwm API (code 0 + play URL bisa di-GET, mp4), yt-dlp extract +
 //     download (616KB ffprobe OK), ssstik -> tikcdn (GET 200, ftyp mp4).
-//   Instagram: yt-dlp extract + download (677KB ffprobe OK).
+//     BUG NEKOGRAM 24 Nov: URL hasil extract kadang BUKAN video — yt-dlp
+//     extract URL TikTok dibalas 403 HTML oleh CDN, ssstik ambil link poster
+//     JPEG; bot kirim URL itu ke Telegram tanpa cek, klien gagal memutar.
+//     PERBAIKAN 24 Nov: semua hasil mode URL divalidasi HEAD dulu (status
+//     200 + content-type video + ukuran wajar) sebelum di-yield; ssstik
+//     sekarang pilih link /v/ (video), bukan match pertama (poster).
+//     downloadUrlFile juga cek magic bytes ftyp. Tikwm sendiri mentok:
+//     API ~2-3 dtk, limit 1 req/detik — tidak bisa dicepetin.
+//   Instagram: yt-dlp extract + download (677KB ffprobe OK). Mentok: extract
+//     ~5,3 dtk di semua client (web = android = skipweb) — Instagram-bound,
+//     tidak ada jalur yang lebih cepat.
 //   Spotify: oEmbed meta + ytsearch (android) + unduh audio mp3 (6,4MB OK).
+//     Mentok: total 18-36 dtk, variansi jaringan besar; android/web/
+//     android_music tidak ada yang terbukti lebih cepat; convert mp3 cuma
+//     ~4 dtk (skip convert hemat 4 dtk tapi file jadi .m4a, bukan .mp3 —
+//     tidak diubah, user minta MP3). Android client cuma punya format 18
+//     (video+audio 11,8MB); web/android_music punya audio-only (3,3MB)
+//     tapi total waktunya sama (variansi menutupi).
 // Mati / tidak terverifikasi (TIDAK dipakai):
 //   cobalt API publik — sekarang minta JWT (error.api.auth.jwt.missing);
 //     jalur ada di kode tapi NONAKTIF kecuali env COBALT_API_KEY diset.
@@ -26,7 +42,7 @@ const {
   extractDirect, downloadFile, downloadUrlFile, extractAudioInfo, downloadAudioFile,
   downloadAudioUrlFile, fetchTikwm, fetchSpotifyMeta,
   extractDirectClient, downloadFileClient, extractAudioInfoClient, downloadAudioFileClient,
-  cobaltFetch, fetchSsstik,
+  cobaltFetch, fetchSsstik, validateVideoUrl,
 } = require('./downloader');
 const cache = require('./cache');
 
@@ -110,6 +126,19 @@ async function* chain(routes, platform, url, chatId, meta) {
     try {
       const res = await r.run(url, chatId, meta);
       if (res.tooBig) throw new Error('TOO_BIG');
+      // Hasil mode URL WAJIB divalidasi dulu — URL extract kadang bukan video
+      // (403 HTML / thumbnail JPEG) dan Telegram akan simpan apa pun itu
+      // sebagai "video" yang tidak bisa diputar (bug Nekogram 24 Nov).
+      // URL tidak valid = jalur gagal, lanjut ke jalur berikutnya.
+      if (res.mode === 'url' && res.url) {
+        const vok = await validateVideoUrl(res.url);
+        if (!vok.ok) {
+          const cls2 = classifyError(new Error(vok.reason));
+          failures.push({ route: r.id, error: 'URL tidak valid: ' + vok.reason, cls: cls2 });
+          logRoute(r.id, platform, false, new Error('URL tidak valid: ' + vok.reason));
+          continue;
+        }
+      }
       logRoute(r.id, platform, true);
       yield { route: r.id, ...res };
     } catch (e) {
