@@ -89,11 +89,12 @@ function downloadFile(url, chatId) {
 // Unduh file video langsung dari URL (pakai curl) — buat link CDN hasil
 // tikwm, yang tidak bisa diunduh yt-dlp dengan selector format biasa.
 function downloadUrlFile(url, chatId) {
+  const safeUrl = validateCdnUrl(url);
   return new Promise((resolve, reject) => {
     const dir = path.join(__dirname, 'tmp_dl', String(chatId));
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, 'dl.mp4');
-    const args = ['-sL', '--max-time', '90', '-A', 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36', '-o', file, url];
+    const args = ['-sL', '--max-time', '90', '-A', 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36', '-o', file, safeUrl];
     execFile('curl', args, { timeout: 95000 }, (err) => {
       if (err) return reject(new Error('download gagal: ' + (err.message || 'curl error')));
       if (!fs.existsSync(file)) return reject(new Error('download gagal: file tidak ketemu'));
@@ -155,11 +156,12 @@ function downloadAudioFile(url, chatId, fixedName) {
 // Unduh file audio langsung dari URL (pakai curl) — buat link musik tikwm,
 // yang sudah mp3 dan tidak butuh ffmpeg. Nama file = judul (dibersihkan).
 function downloadAudioUrlFile(url, chatId, title) {
+  const safeUrl = validateCdnUrl(url);
   return new Promise((resolve, reject) => {
     const dir = path.join(__dirname, 'tmp_dl', String(chatId));
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, sanitizeTitle(title) + '.mp3');
-    const args = ['-sL', '--max-time', '90', '-A', 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36', '-o', file, url];
+    const args = ['-sL', '--max-time', '90', '-A', 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36', '-o', file, safeUrl];
     execFile('curl', args, { timeout: 95000 }, (err) => {
       if (err) return reject(new Error('download audio gagal: ' + (err.message || 'curl error')));
       if (!fs.existsSync(file)) return reject(new Error('download audio gagal: file tidak ketemu'));
@@ -278,4 +280,190 @@ function platformOf(text) {
   return null;
 }
 
-module.exports = { extractDirect, downloadFile, downloadUrlFile, extractAudioInfo, downloadAudioFile, downloadAudioUrlFile, fetchTikwm, fetchSpotifyMeta, isSpotifyUrl, checkYtDlp, isVideoUrl, platformOf, MAX_BYTES };
+// ---------- keamanan: validasi URL + path ----------
+// Hanya host ini yang boleh diunduh. Regex lama (isVideoUrl) tidak di-anchor
+// — link seperti https://jahat.com/?x=youtube.com/... lolos. Sekarang cek
+// hostname hasil parse URL, tolak userinfo (@) dan host privat/reserved
+// (localhost, 127.x, 10.x, 172.16-31.x, 192.168.x, ::1, 169.254.x) —
+// cegah bot dipakai buat nyerang layanan internal (SSRF).
+const ALLOWED_HOSTS = new Set([
+  'tiktok.com', 'www.tiktok.com', 'vt.tiktok.com', 'vm.tiktok.com',
+  'youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be',
+  'music.youtube.com',
+  'instagram.com', 'www.instagram.com',
+  'open.spotify.com',
+]);
+function isPrivateIp(host) {
+  if (!host) return true;
+  const h = host.toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === 'localhost' || h === '::1' || h.endsWith('.localhost')) return true;
+  if (/^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^169\.254\./.test(h)) return true;
+  const m = h.match(/^172\.(\d+)\./);
+  if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return true;
+  if (/^0\.0\.0\.0$/.test(h) || /^::/.test(h)) return true;
+  return false;
+}
+// Kembalikan { ok, platform, reason }. platform: tiktok|youtube|instagram|spotify|null.
+function validateMediaUrl(text) {
+  if (!text || typeof text !== 'string') return { ok: false, reason: 'link kosong' };
+  let u;
+  try { u = new URL(text.trim()); } catch (_) { return { ok: false, reason: 'link tidak valid' }; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false, reason: 'protokol tidak didukung' };
+  if (u.username || u.password) return { ok: false, reason: 'link mengandung kredensial' };
+  const host = u.hostname.toLowerCase();
+  if (isPrivateIp(host)) return { ok: false, reason: 'host privat/dilarang' };
+  if (!ALLOWED_HOSTS.has(host)) return { ok: false, reason: 'domain tidak didukung' };
+  let platform = null;
+  if (/tiktok\.com$/.test(host)) platform = 'tiktok';
+  else if (/youtube\.com$/.test(host) || host === 'youtu.be') platform = 'youtube';
+  else if (/instagram\.com$/.test(host)) platform = 'instagram';
+  else if (host === 'open.spotify.com') platform = 'spotify';
+  return { ok: true, platform, url: u.toString() };
+}
+// Gabung path tapi pastikan hasil akhirnya tetap di dalam dir (anti ../).
+function safeJoin(dir, name) {
+  const resolved = path.resolve(dir, String(name));
+  const base = path.resolve(dir) + path.sep;
+  if (resolved !== path.resolve(dir) && !resolved.startsWith(base)) throw new Error('nama file tidak aman');
+  return resolved;
+}
+
+// ---------- varian client yt-dlp (jalur fallback YouTube) ----------
+// Client default YouTube sering kena bot-check (429 / "Sign in to confirm
+// you're not a bot") dari IP datacenter. Client android lolos lebih sering
+// (terverifikasi 24 Nov: extract + download Shorts jalan). Tiap client =
+// jalur fallback yang berbeda.
+function ytdlpArgsBase(extraExtractorArgs) {
+  const args = [];
+  if (extraExtractorArgs) args.push('--extractor-args', extraExtractorArgs);
+  return args;
+}
+function extractDirectClient(url, client) {
+  const extra = client === 'android' ? 'youtube:player_client=android'
+    : client === 'android-skipweb' ? 'youtube:player_client=android;player_skip=webpage'
+    : null;
+  const args = [...ytdlpArgsBase(extra), '--dump-json', '--no-playlist', '-f', FORMAT, '--socket-timeout', '30', '--no-warnings', url];
+  return execYtDlp(args, 30000, 2).then((stdout) => {
+    let j;
+    try { j = JSON.parse(stdout); } catch (e) { throw new Error('extract gagal: respon yt-dlp tidak bisa dibaca'); }
+    const direct = j.url;
+    if (!direct) throw new Error('extract gagal: tidak ada URL langsung');
+    const size = j.filesize || j.filesize_approx || 0;
+    return { url: direct, size, title: j.title || '', tooBig: size > MAX_BYTES };
+  }).catch((err) => {
+    if (err.message && err.message.startsWith('extract gagal')) throw err;
+    throw new Error('extract gagal: ' + (err.killed ? 'timeout' : (err.message || 'yt-dlp error')));
+  });
+}
+function downloadFileClient(url, chatId, client) {
+  const dir = path.join(__dirname, 'tmp_dl', String(chatId));
+  fs.mkdirSync(dir, { recursive: true });
+  const outTpl = path.join(dir, 'dl.%(ext)s');
+  const extra = client === 'android' ? 'youtube:player_client=android' : null;
+  const args = [...ytdlpArgsBase(extra), '--no-playlist', '-f', FORMAT_DL, '--merge-output-format', 'mp4', '--socket-timeout', '30', '-o', outTpl, '--no-warnings', url];
+  return execYtDlp(args, 120000, 2).then(() => {
+    const all = fs.readdirSync(dir).filter((f) => f.startsWith('dl.'));
+    const files = all.filter((f) => f.endsWith('.mp4')).concat(all.filter((f) => !f.endsWith('.mp4')));
+    if (!files.length) throw new Error('download gagal: file tidak ketemu');
+    const file = safeJoin(dir, files[0]);
+    const size = fs.statSync(file).size;
+    return { file, size };
+  }).catch((err) => {
+    if (err.message && err.message.startsWith('download gagal')) throw err;
+    throw new Error('download gagal: ' + (err.killed ? 'timeout' : (err.message || 'yt-dlp error')));
+  });
+}
+function extractAudioInfoClient(url, client) {
+  const extra = client === 'android' ? 'youtube:player_client=android' : null;
+  const fmt = client === 'android' ? 'bestaudio/best' : 'bestaudio';
+  const args = [...ytdlpArgsBase(extra), '--dump-json', '--no-playlist', '-f', fmt, '--socket-timeout', '30', '--no-warnings', url];
+  return execYtDlp(args, 30000, 2).then((stdout) => {
+    let j;
+    try { j = JSON.parse(stdout); } catch (e) { throw new Error('info audio gagal: respon yt-dlp tidak bisa dibaca'); }
+    const size = j.filesize || j.filesize_approx || 0;
+    return { title: j.title || '', uploader: j.uploader || j.channel || '', duration: j.duration || 0, size, tooBig: size > MAX_BYTES, url: j.url || '' };
+  }).catch((err) => {
+    if (err.message && err.message.startsWith('info audio gagal')) throw err;
+    throw new Error('info audio gagal: ' + (err.killed ? 'timeout' : (err.message || 'yt-dlp error')));
+  });
+}
+function downloadAudioFileClient(url, chatId, fixedName, client) {
+  return new Promise((resolve, reject) => {
+    const dir = path.join(__dirname, 'tmp_dl', String(chatId));
+    fs.mkdirSync(dir, { recursive: true });
+    const outTpl = fixedName
+      ? path.join(dir, sanitizeTitle(fixedName) + '.%(ext)s')
+      : path.join(dir, '%(title)s.%(ext)s');
+    const extra = client === 'android' ? 'youtube:player_client=android' : null;
+    const args = [...ytdlpArgsBase(extra), '--no-playlist', '-x', '--audio-format', 'mp3', '--audio-quality', '0', '--embed-metadata', '--socket-timeout', '30', '-f', 'bestaudio/best', '-o', outTpl, '--no-warnings', url];
+    execYtDlp(args, 120000, 2).then(() => {
+      const files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.mp3'));
+      if (!files.length) return reject(new Error('download audio gagal: file tidak ketemu'));
+      const file = safeJoin(dir, files[0]);
+      const size = fs.statSync(file).size;
+      const title = files[0].replace(/\.mp3$/i, '');
+      resolve({ file, size, title });
+    }).catch((err) => {
+      if (err.message && err.message.startsWith('download audio gagal')) return reject(err);
+      reject(new Error('download audio gagal: ' + (err.killed ? 'timeout' : (err.message || 'yt-dlp error'))));
+    });
+  });
+}
+
+// ---------- cobalt (jalur fallback, BUTUH API KEY) ----------
+// API publik cobalt sekarang minta JWT (error.api.auth.jwt.missing tanpa
+// key). Jalur ini AKTIF hanya kalau env COBALT_API_KEY diset — tanpa key,
+// jalur dilewati (bukan error). Key jangan pernah di-commit.
+async function cobaltFetch(url, isAudio) {
+  const key = process.env.COBALT_API_KEY || '';
+  if (!key) throw new Error('COBALT_NO_KEY');
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 25000);
+  try {
+    const res = await fetch('https://api.cobalt.tools/', {
+      method: 'POST', signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': 'Api-Key ' + key },
+      body: JSON.stringify(isAudio
+        ? { url, aFormat: 'mp3', filenamePattern: 'basic' }
+        : { url, vCodec: 'h264', vQuality: '720', filenamePattern: 'basic' }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (j.status === 'stream' || j.status === 'redirect') {
+      if (!j.url) throw new Error('cobalt: tidak ada link');
+      return { url: j.url, title: '', size: 0, tooBig: false, via: 'cobalt' };
+    }
+    throw new Error('cobalt: ' + ((j.error && j.error.code) || j.status || ('HTTP ' + res.status)));
+  } finally { clearTimeout(timer); }
+}
+
+// ---------- ssstik (jalur fallback TikTok) ----------
+// POST form ke ssstik.io, ambil link tikcdn.io dari HTML hasil.
+// Terverifikasi 24 Nov: link tikcdn bisa diunduh (GET 200, ftyp mp4).
+async function fetchSsstik(tiktokUrl) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 25000);
+  try {
+    const res = await fetch('https://ssstik.io/abc?url=dl', {
+      method: 'POST', signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36' },
+      body: 'id=' + encodeURIComponent(tiktokUrl) + '&locale=en&tt=0',
+    });
+    if (!res.ok) throw new Error('ssstik HTTP ' + res.status);
+    const html = await res.text();
+    if (/cloudflare|attention required|just a moment/i.test(html)) throw new Error('ssstik kena Cloudflare');
+    const m = html.match(/https?:\/\/tikcdn\.io\/ssstik\/[^\s"'<>]+/);
+    if (!m) throw new Error('ssstik: link download tidak ketemu');
+    return { url: m[0], size: 0, title: '', tooBig: false, via: 'ssstik' };
+  } finally { clearTimeout(timer); }
+}
+
+// Unduh file dari URL CDN — validasi dulu (hanya http/https, host bukan privat).
+function validateCdnUrl(url) {
+  let u;
+  try { u = new URL(String(url)); } catch (_) { throw new Error('URL CDN tidak valid'); }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('URL CDN tidak valid');
+  if (isPrivateIp(u.hostname)) throw new Error('URL CDN host privat/dilarang');
+  return u.toString();
+}
+
+module.exports = { extractDirect, downloadFile, downloadUrlFile, extractAudioInfo, downloadAudioFile, downloadAudioUrlFile, fetchTikwm, fetchSpotifyMeta, isSpotifyUrl, checkYtDlp, isVideoUrl, platformOf, MAX_BYTES, validateMediaUrl, safeJoin, extractDirectClient, downloadFileClient, extractAudioInfoClient, downloadAudioFileClient, cobaltFetch, fetchSsstik, validateCdnUrl };

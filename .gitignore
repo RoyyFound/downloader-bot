@@ -8,3 +8,6 @@ users.json
 stats.json
 *.bak
 *.bak-*
+cache.db
+cache.db-journal
+!.env.example

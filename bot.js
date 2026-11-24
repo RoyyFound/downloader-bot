@@ -7,7 +7,9 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
-const { extractDirect, downloadFile, downloadUrlFile, extractAudioInfo, downloadAudioFile, downloadAudioUrlFile, fetchTikwm, fetchSpotifyMeta, isSpotifyUrl, checkYtDlp, isVideoUrl, platformOf, MAX_BYTES } = require('./downloader');
+const { downloadUrlFile, checkYtDlp, platformOf, MAX_BYTES, validateMediaUrl } = require('./downloader');
+const { videoChain, audioChain, spotifyChain, routeCounts, classifyError } = require('./routes');
+const cache = require('./cache');
 
 const TOKEN = process.env.BOT_TOKEN || '';
 const OWNER = Number(process.env.OWNER_CHAT_ID || '6690512207');
@@ -17,26 +19,45 @@ const MINIAPP_URL = 'https://jajananbubro.web.id/miniapp';
 
 if (!TOKEN) { console.error('BOT_TOKEN kosong di .env'); process.exit(1); }
 
-// ---------- statistik (user + download) ----------
-// users.json: { chatId: { name, first } } — dicatat saat ada chat masuk.
-// stats.json: { downloads } — naik tiap download berhasil dikirim.
-// /stats (owner saja) menampilkan totalnya.
-const USERS_FILE = __dirname + '/users.json';
-const STATS_FILE = __dirname + '/stats.json';
-let users = {};
-let stats = { downloads: 0 };
-try { users = JSON.parse(fs.readFileSync(USERS_FILE, 'utf-8') || '{}'); if (typeof users !== 'object' || Array.isArray(users)) users = {}; } catch (_) { users = {}; }
-try { const s = JSON.parse(fs.readFileSync(STATS_FILE, 'utf-8') || '{}'); if (typeof s.downloads === 'number') stats.downloads = s.downloads; } catch (_) {}
-function saveUsers() { try { fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2)); } catch (e) { console.log('SAVE_USERS_FAIL ' + e.message); } }
-function saveStats() { try { fs.writeFileSync(STATS_FILE, JSON.stringify(stats)); } catch (e) { console.log('SAVE_STATS_FAIL ' + e.message); } }
+// ---------- statistik (user + download + cache) ----------
+// Dulu users.json / stats.json (file). Sekarang di cache.js: MySQL kalau
+// env MYSQL_* diset, kalau tidak SQLite lokal (cache.db) — keduanya pakai
+// TTL + cleanup berkala. Isi lama users.json/stats.json dimigrasi otomatis
+// sekali saat start (lihat cache.js migrateLegacy).
 function recordUser(msg) {
   if (!msg || !msg.chat) return;
-  const id = String(msg.chat.id);
-  if (!users[id]) {
-    const from = msg.from || {};
-    users[id] = { name: [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || '', first: new Date().toISOString() };
-    saveUsers();
-  }
+  const from = msg.from || {};
+  const name = [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || '';
+  cache.recordUser(msg.chat.id, name).catch(() => {});
+}
+
+// ---------- anti-DoS: 1 download per chat + rate limit + cap global ----------
+// Tanpa ini satu user bisa spam link dan habisin disk/CPU (bot lag buat semua).
+const busyDl = new Set(); // chatId yang lagi download
+let activeDownloads = 0;
+const MAX_CONCURRENT = 5;
+const RL_WINDOW_MS = 10 * 60 * 1000;
+const RL_MAX = 10; // maks 10 download per 10 menit per chat
+const rlHits = new Map(); // chatId -> [timestamp]
+function rateLimited(chatId) {
+  const now = Date.now();
+  const arr = (rlHits.get(chatId) || []).filter((t) => now - t < RL_WINDOW_MS);
+  if (arr.length >= RL_MAX) { rlHits.set(chatId, arr); return true; }
+  arr.push(now);
+  rlHits.set(chatId, arr);
+  return false;
+}
+async function acquireSlot(chatId) {
+  if (busyDl.has(chatId)) return 'busy';
+  if (activeDownloads >= MAX_CONCURRENT) return 'global-busy';
+  if (rateLimited(chatId)) return 'rate';
+  busyDl.add(chatId);
+  activeDownloads++;
+  return 'ok';
+}
+function releaseSlot(chatId) {
+  busyDl.delete(chatId);
+  activeDownloads = Math.max(0, activeDownloads - 1);
 }
 
 const modes = {}; // chatId -> 'tiktok' | 'youtube' | 'instagram' (tombol download yang dipencet)
@@ -82,9 +103,28 @@ function sendWelcome(chatId, disp) {
 }
 
 bot.onText(/\/start/, (msg) => { sendWelcome(msg.chat.id, msg.from.username ? '@' + msg.from.username : (msg.from.first_name || 'Kak')); });
-bot.onText(/\/stats/, (msg) => {
+bot.onText(/\/stats/, async (msg) => {
   if (msg.chat.id !== OWNER) return;
-  bot.sendMessage(msg.chat.id, '📊 Statistik bot\n👥 Total user: ' + Object.keys(users).length + '\n⬇️ Total download berhasil: ' + stats.downloads);
+  try {
+    const s = await cache.getStats();
+    const rs = await cache.getRouteStats();
+    const counts = routeCounts();
+    let txt = '📊 Statistik bot\n'
+      + '👥 Total user: ' + s.users + '\n'
+      + '⬇️ Total download berhasil: ' + s.downloads + '\n'
+      + '💾 Cache: ' + s.cacheRows + ' entri (TTL ' + s.ttlDays + ' hari, backend ' + s.backend + ')\n'
+      + '🔀 Jalur per platform: ' + Object.entries(counts).map(([k, v]) => k + ' ' + v).join(', ') + '\n\n'
+      + '🛣️ Kesehatan jalur:\n';
+    if (!rs.length) txt += '(belum ada percobaan tercatat)\n';
+    for (const r of rs) {
+      txt += '• ' + r.route + ' [' + r.platform + '] ✅' + r.ok_count + ' ❌' + r.fail_count;
+      if (r.last_error) txt += ' — terakhir: ' + String(r.last_error).slice(0, 60);
+      txt += '\n';
+    }
+    bot.sendMessage(msg.chat.id, txt);
+  } catch (e) {
+    bot.sendMessage(msg.chat.id, '📊 Statistik gagal dibaca: ' + e.message);
+  }
 });
 bot.onText(/\/saldo/, (msg) => {
   bot.sendMessage(msg.chat.id, '💎 Download sekarang GRATIS, nggak perlu token lagi. Kirim link videonya aja.');
@@ -105,9 +145,41 @@ bot.onText(/\/instagram/, (msg) => { askDownload(msg.chat.id, 'instagram'); });
 bot.onText(/\/spotify/, (msg) => { askDownload(msg.chat.id, 'spotify'); });
 
 // ---------- download ----------
+// Pesan gagal JUJUR berdasarkan penyebab — bukan "video privat" kalau yang
+// kena limit/bot-check. Klasifikasi dari routes.classifyError.
+function failTextFor(err) {
+  const failures = (err && err.failures) || [];
+  const cls = (err && err.cls) || classifyError(err);
+  if (failures.some((f) => f.cls === 'LIMIT')) return '❌ API TikTok lagi kena limit harian (jatah gratis 10.000/hari, dipake bareng). Limit reset tiap jam 07:00 WIB — coba lagi besok pagi. YouTube/Instagram tetap jalan.';
+  if (cls === 'BOTCHECK' || failures.some((f) => f.cls === 'BOTCHECK')) return '❌ YouTube lagi nge-blokir download dari server bot (bot-check), bukan salah link kamu. Semua jalur cadangan juga kena — coba lagi beberapa menit lagi.';
+  if (failures.some((f) => f.cls === 'DOWN')) return '❌ Server API TikTok (tikwm) lagi down/error, bukan salah link kamu. Coba lagi nanti. YouTube/Instagram tetap jalan.';
+  if (cls === 'NOTFOUND' || failures.some((f) => f.cls === 'NOTFOUND')) return '❌ Videonya nggak ketemu / privat / login-only. Pastikan link-nya publik.';
+  if (cls === 'NETWORK' || failures.some((f) => f.cls === 'NETWORK')) return '❌ Koneksi ke server video lagi bermasalah. Coba lagi bentar.';
+  return '❌ Gagal ambil video. Coba link lain, atau pastikan videonya publik (bukan privat/login-only).';
+}
+const TOO_BIG_MSG = '❌ Videonya kegedean (di atas ±45MB), bot Telegram nggak bisa kirim. Coba video lain yang lebih pendek.';
+
 async function handleDownload(chatId, url, format, statusMsgId) {
   const t0 = Date.now();
   const fmt = format === 'mp3' ? 'mp3' : 'mp4';
+  // Validasi link (domain allowlist + tolak host privat). Regex lama tidak
+  // di-anchor — link jebakan seperti https://jahat.com/?x=youtube.com lolos.
+  const v = validateMediaUrl(url);
+  if (!v.ok) {
+    const txt = '❌ Link nggak bisa diproses (' + v.reason + '). Kirim link TikTok / YouTube / Instagram yang publik ya.';
+    if (statusMsgId) return bot.editMessageText(txt, { chat_id: chatId, message_id: statusMsgId }).catch(() => {});
+    return bot.sendMessage(chatId, txt);
+  }
+  url = v.url;
+  const plat = v.platform || platformOf(url);
+  const slot = await acquireSlot(chatId);
+  if (slot !== 'ok') {
+    const txt = slot === 'busy' ? '⏳ Masih ada download kamu yang jalan, tunggu selesai dulu ya.'
+      : slot === 'rate' ? '⏳ Kebanyakan request, tunggu bentar ya (maks 10 download per 10 menit).'
+      : '⏳ Bot lagi sibuk, coba lagi bentar ya.';
+    if (statusMsgId) return bot.editMessageText(txt, { chat_id: chatId, message_id: statusMsgId }).catch(() => {});
+    return bot.sendMessage(chatId, txt);
+  }
   let proc;
   if (statusMsgId) {
     proc = { message_id: statusMsgId };
@@ -117,169 +189,149 @@ async function handleDownload(chatId, url, format, statusMsgId) {
   }
   const fail = (txt) => bot.editMessageText(txt, { chat_id: chatId, message_id: proc.message_id }).catch(() => {});
   const done = () => bot.deleteMessage(chatId, proc.message_id).catch(() => {});
-  const plat = platformOf(url);
-
-  // ===== MP3 (audio saja, nama file + judul ikut judul video) =====
-  if (fmt === 'mp3') {
-    let audioFile = null;
-    let trackTitle = '';
-    let trackPerformer = '';
-    let trackDuration = 0;
-    try {
-      // TikTok: musiknya langsung dari API tikwm (mp3, cepat, tanpa ffmpeg).
-      if (plat === 'tiktok') {
-        try {
-          const tk = await fetchTikwm(url);
-          if (tk.musicUrl) {
-            console.log('TT_MUSIC_OK chat=' + chatId);
-            trackTitle = tk.musicTitle || tk.title || '';
-            trackPerformer = tk.musicAuthor || '';
-            audioFile = await downloadAudioUrlFile(tk.musicUrl, chatId, trackTitle);
-          }
-        } catch (e) { console.log('TT_MUSIC_FAIL chat=' + chatId + ' err=' + e.message); }
-      }
-      // Jalur umum: yt-dlp extract audio -> ffmpeg jadi mp3 (nama file = judul).
-      if (!audioFile) {
-        const info = await extractAudioInfo(url);
-        trackTitle = info.title || '';
-        trackPerformer = info.uploader || '';
-        trackDuration = info.duration || 0;
-        if (info.tooBig) {
-          console.log('DL_MP3_TOO_BIG chat=' + chatId + ' size=' + info.size);
-          return fail('❌ Audionya kegedean (di atas ±45MB), bot Telegram nggak bisa kirim. Coba video lain yang lebih pendek.');
-        }
-        audioFile = await downloadAudioFile(url, chatId);
-        if (!trackTitle) trackTitle = audioFile.title || '';
-      }
-      if (audioFile.size > MAX_BYTES) {
-        console.log('DL_MP3_TOO_BIG chat=' + chatId + ' size=' + audioFile.size);
-        return fail('❌ Audionya kegedean (di atas ±45MB), bot Telegram nggak bisa kirim. Coba video lain yang lebih pendek.');
-      }
-      const audioOpts = { caption: trackTitle ? '🎵 ' + trackTitle : '🎵 Audio kamu' };
-      if (trackTitle) audioOpts.title = trackTitle;
-      if (trackPerformer) audioOpts.performer = trackPerformer;
-      if (trackDuration) audioOpts.duration = Math.round(trackDuration);
-      await bot.sendAudio(chatId, audioFile.file, audioOpts);
-      await done();
-      stats.downloads++; saveStats();
-      console.log('DL_MP3_OK chat=' + chatId + ' ms=' + (Date.now() - t0) + ' size=' + audioFile.size + ' title=' + (trackTitle || '-'));
-    } catch (e) {
-      console.log('DL_MP3_FAIL chat=' + chatId + ' ms=' + (Date.now() - t0) + ' err=' + e.message);
-      await fail('❌ Gagal ambil audio. Coba link lain, atau pastikan videonya publik (bukan privat/login-only).');
-    } finally {
-      if (audioFile && audioFile.file) { try { fs.unlinkSync(audioFile.file); } catch (_) {} }
-    }
-    return;
-  }
-
-  // ===== MP4 (video, jalur lama) =====
-  let d = null;
-  let tikwmLimited = false; // API TikTok (tikwm) kena limit harian — pesannya beda
-  let tikwmDown = false; // API TikTok lagi down/error — pesannya beda
-  // TikTok: coba API tikwm dulu (yt-dlp sering gagal karena IP HP diblokir).
-  if (plat === 'tiktok') {
-    try {
-      d = await fetchTikwm(url);
-      console.log('TT_API_OK chat=' + chatId);
-    } catch (e) {
-      console.log('TT_API_FAIL chat=' + chatId + ' err=' + e.message);
-      if (String(e.message || '').startsWith('TIKWM_LIMIT')) tikwmLimited = true;
-      if (String(e.message || '').startsWith('TIKWM_DOWN')) tikwmDown = true;
-    }
-  }
-  if (!d) {
-    try {
-      d = await extractDirect(url);
-    } catch (e) {
-      // Shorts/video baru YouTube sering cuma punya format DASH terpisah
-      // (tanpa 18/22) — link langsung ga bisa diambil, tapi file-nya masih
-      // bisa diunduh + digabung ffmpeg. Jangan gagal di sini, lanjut jalur 2.
-      console.log('DL_EXTRACT_FAIL chat=' + chatId + ' ms=' + (Date.now() - t0) + ' err=' + e.message);
-      d = null;
-    }
-  }
-  if (d && d.tooBig) {
-    await fail('❌ Videonya kegedean (di atas ±45MB), bot Telegram nggak bisa kirim. Coba video lain yang lebih pendek.');
-    return;
-  }
-  const caption = (d && d.title ? d.title.slice(0, 200) : 'Video kamu');
-  // Jalur 1: kirim lewat URL (cepat) — cuma kalau extract berhasil.
-  if (d) {
-    try {
-      await bot.sendVideo(chatId, d.url, { caption });
-      await done();
-      stats.downloads++; saveStats();
-      console.log('DL_OK chat=' + chatId + ' ms=' + (Date.now() - t0));
-      return;
-    } catch (e) {
-      // URL-nya valid tapi server Telegram ditolak ambil (link YouTube dikunci
-      // ke IP HP) — lanjut jalur 2: unduh file lalu upload.
-      console.log('DL_URL_FAIL chat=' + chatId + ' ms=' + (Date.now() - t0) + ' err=' + e.message);
-    }
-  }
-  // Jalur 2: unduh file ke HP, kirim sebagai file.
-  let dlFile = null;
+  const tmpFiles = [];
   try {
-    dlFile = (d && d.via === 'tikwm') ? await downloadUrlFile(d.url, chatId) : await downloadFile(url, chatId);
-    if (dlFile.size > MAX_BYTES) {
-      await fail('❌ Videonya kegedean (di atas ±45MB), bot Telegram nggak bisa kirim. Coba video lain yang lebih pendek.');
-      return;
+    // 0. Cache dulu: link yang sama pernah dikirim → kirim ulang file_id
+    // Telegram (tanpa download ulang). Entri kedaluwarsa 7 hari (TTL).
+    const cached = await cache.getCache(plat, url, fmt).catch(() => null);
+    if (cached && cached.file_id) {
+      try {
+        if (fmt === 'mp4') await bot.sendVideo(chatId, cached.file_id, { caption: (cached.title || 'Video kamu').slice(0, 200) });
+        else await bot.sendAudio(chatId, cached.file_id, { caption: '🎵 ' + (cached.title || 'Audio kamu'), title: cached.title || undefined });
+        await done();
+        await cache.incDownloads().catch(() => {});
+        console.log('DL_CACHE_OK chat=' + chatId + ' fmt=' + fmt + ' ms=' + (Date.now() - t0));
+        return;
+      } catch (e) { console.log('DL_CACHE_STALE chat=' + chatId + ' err=' + e.message); }
     }
-    await bot.sendVideo(chatId, dlFile.file, { caption });
-    await done();
-    stats.downloads++; saveStats();
-    console.log('DL_OK_FILE chat=' + chatId + ' ms=' + (Date.now() - t0));
+    // 1. Rantai fallback: tiap hasil dicoba dikirim; kalau kirim gagal,
+    // lanjut ke jalur berikutnya (generator berhenti sendiri kalau habis).
+    const gen = fmt === 'mp4' ? videoChain(plat, url, chatId) : audioChain(plat, url, chatId);
+    let lastErr = null;
+    for await (const res of gen) {
+      try {
+        let fileId = null;
+        let title = res.title || '';
+        let size = res.size || 0;
+        if (fmt === 'mp4') {
+          const caption = (title ? title.slice(0, 200) : 'Video kamu');
+          if (res.mode === 'url') {
+            try {
+              const msg = await bot.sendVideo(chatId, res.url, { caption });
+              fileId = msg.video && msg.video.file_id;
+            } catch (e) {
+              // URL valid tapi server Telegram ditolak ambil (link dikunci
+              // ke IP server) — unduh file-nya lalu kirim sebagai file.
+              console.log('DL_URL_FAIL chat=' + chatId + ' route=' + res.route + ' err=' + e.message);
+              const dl = await downloadUrlFile(res.url, chatId);
+              if (dl.size > MAX_BYTES) { await fail(TOO_BIG_MSG); return; }
+              tmpFiles.push(dl.file);
+              const msg = await bot.sendVideo(chatId, dl.file, { caption });
+              fileId = msg.video && msg.video.file_id;
+              size = dl.size;
+            }
+          } else {
+            if (res.size > MAX_BYTES) { await fail(TOO_BIG_MSG); return; }
+            tmpFiles.push(res.file);
+            const msg = await bot.sendVideo(chatId, res.file, { caption });
+            fileId = msg.video && msg.video.file_id;
+          }
+        } else {
+          if (res.size > MAX_BYTES) { await fail(TOO_BIG_MSG); return; }
+          tmpFiles.push(res.file);
+          const audioOpts = { caption: title ? '🎵 ' + title : '🎵 Audio kamu' };
+          if (title) audioOpts.title = title;
+          if (res.performer) audioOpts.performer = res.performer;
+          if (res.duration) audioOpts.duration = Math.round(res.duration);
+          const msg = await bot.sendAudio(chatId, res.file, audioOpts);
+          fileId = msg.audio && msg.audio.file_id;
+        }
+        // Berhasil terkirim → simpan ke cache (file_id Telegram) + hitung.
+        if (fileId) await cache.setCache(plat, url, fmt, fileId, title, size, res.route).catch(() => {});
+        await cache.incDownloads().catch(() => {});
+        await done();
+        console.log('DL_OK chat=' + chatId + ' fmt=' + fmt + ' route=' + res.route + ' ms=' + (Date.now() - t0) + ' size=' + size + ' title=' + (title || '-'));
+        return;
+      } catch (e) {
+        lastErr = e;
+        console.log('DL_SEND_FAIL chat=' + chatId + ' route=' + res.route + ' err=' + e.message);
+        // lanjut ke jalur berikutnya
+      }
+    }
+    // Semua jalur habis tanpa ada yang berhasil terkirim.
+    throw lastErr || new Error('CHAIN_FAIL');
   } catch (e) {
-    console.log('DL_FAIL chat=' + chatId + ' ms=' + (Date.now() - t0) + ' err=' + e.message);
-    if (tikwmLimited) {
-      await fail('❌ API TikTok lagi kena limit harian (jatah gratis 10.000/hari, dipake bareng). Limit reset tiap jam 07:00 WIB — coba lagi besok pagi. YouTube/Instagram tetap jalan.');
-    } else if (tikwmDown) {
-      await fail('❌ Server API TikTok (tikwm) lagi down/error, bukan salah link kamu. Coba lagi nanti. YouTube/Instagram tetap jalan.');
-    } else {
-      await fail('❌ Gagal ambil video. Coba link lain, atau pastikan videonya publik (bukan privat/login-only).');
-    }
+    if (e.message === 'TOO_BIG') { await fail(TOO_BIG_MSG); return; }
+    console.log('DL_FAIL chat=' + chatId + ' fmt=' + fmt + ' ms=' + (Date.now() - t0) + ' err=' + e.message);
+    await fail(failTextFor(e));
   } finally {
-    if (dlFile && dlFile.file) { try { fs.unlinkSync(dlFile.file); } catch (_) {} }
+    releaseSlot(chatId);
+    for (const f of tmpFiles) { try { fs.unlinkSync(f); } catch (_) {} }
   }
 }
 
 // ---------- Spotify (langsung MP3, tanpa pilih format) ----------
 // Audio diambil dari YouTube (lagu yang sama), karena file Spotify dikunci
-// DRM. Judul + artis ikut data Spotify.
+// DRM. Judul + artis ikut data Spotify. Rantai: ytsearch android dulu,
+// web cadangan.
 async function handleSpotify(chatId, url) {
   const t0 = Date.now();
+  const v = validateMediaUrl(url);
+  if (!v.ok || v.platform !== 'spotify') {
+    return bot.sendMessage(chatId, '❌ Link Spotify nggak valid. Kirim link track Spotify yang publik ya.');
+  }
+  url = v.url;
+  const slot = await acquireSlot(chatId);
+  if (slot !== 'ok') {
+    return bot.sendMessage(chatId, slot === 'busy' ? '⏳ Masih ada download kamu yang jalan, tunggu selesai dulu ya.'
+      : slot === 'rate' ? '⏳ Kebanyakan request, tunggu bentar ya (maks 10 download per 10 menit).'
+      : '⏳ Bot lagi sibuk, coba lagi bentar ya.');
+  }
   const proc = await bot.sendMessage(chatId, '⏳ Lagi diproses (SPOTIFY → MP3), bentar ya…');
   const fail = (txt) => bot.editMessageText(txt, { chat_id: chatId, message_id: proc.message_id }).catch(() => {});
   const done = () => bot.deleteMessage(chatId, proc.message_id).catch(() => {});
-  let audioFile = null;
+  const tmpFiles = [];
   try {
-    const meta = await fetchSpotifyMeta(url);
-    console.log('SPOTIFY_META_OK chat=' + chatId + ' title=' + meta.title + ' artist=' + meta.artist);
-    const query = (meta.artist ? meta.artist + ' - ' : '') + meta.title;
-    const searchUrl = 'ytsearch1:' + query;
-    const info = await extractAudioInfo(searchUrl);
-    if (info.tooBig) {
-      console.log('SPOTIFY_TOO_BIG chat=' + chatId + ' size=' + info.size);
-      return fail('❌ Audionya kegedean (di atas ±45MB), bot Telegram nggak bisa kirim. Coba lagu lain.');
+    const cached = await cache.getCache('spotify', url, 'mp3').catch(() => null);
+    if (cached && cached.file_id) {
+      try {
+        await bot.sendAudio(chatId, cached.file_id, { caption: '🎵 ' + (cached.title || 'Lagu kamu'), title: cached.title || undefined });
+        await done();
+        await cache.incDownloads().catch(() => {});
+        console.log('SPOTIFY_CACHE_OK chat=' + chatId + ' ms=' + (Date.now() - t0));
+        return;
+      } catch (e) { console.log('SPOTIFY_CACHE_STALE chat=' + chatId + ' err=' + e.message); }
     }
-    audioFile = await downloadAudioFile(searchUrl, chatId, query);
-    if (audioFile.size > MAX_BYTES) {
-      console.log('SPOTIFY_TOO_BIG chat=' + chatId + ' size=' + audioFile.size);
-      return fail('❌ Audionya kegedean (di atas ±45MB), bot Telegram nggak bisa kirim. Coba lagu lain.');
+    let lastErr = null;
+    for await (const res of spotifyChain(url, chatId)) {
+      try {
+        if (res.size > MAX_BYTES) { await fail('❌ Audionya kegedean (di atas ±45MB), bot Telegram nggak bisa kirim. Coba lagu lain.'); return; }
+        tmpFiles.push(res.file);
+        const title = res.title || '';
+        const audioOpts = { caption: '🎵 ' + title + (res.performer ? ' — ' + res.performer : '') };
+        if (title) audioOpts.title = title;
+        if (res.performer) audioOpts.performer = res.performer;
+        if (res.duration) audioOpts.duration = Math.round(res.duration);
+        const msg = await bot.sendAudio(chatId, res.file, audioOpts);
+        const fileId = msg.audio && msg.audio.file_id;
+        if (fileId) await cache.setCache('spotify', url, 'mp3', fileId, title, res.size || 0, res.route).catch(() => {});
+        await cache.incDownloads().catch(() => {});
+        await done();
+        console.log('SPOTIFY_OK chat=' + chatId + ' route=' + res.route + ' ms=' + (Date.now() - t0) + ' size=' + (res.size || 0) + ' title=' + title);
+        return;
+      } catch (e) {
+        lastErr = e;
+        console.log('SPOTIFY_SEND_FAIL chat=' + chatId + ' route=' + res.route + ' err=' + e.message);
+      }
     }
-    const audioOpts = { caption: '🎵 ' + meta.title + (meta.artist ? ' — ' + meta.artist : '') };
-    audioOpts.title = meta.title;
-    if (meta.artist) audioOpts.performer = meta.artist;
-    if (info.duration) audioOpts.duration = Math.round(info.duration);
-    await bot.sendAudio(chatId, audioFile.file, audioOpts);
-    await done();
-    stats.downloads++; saveStats();
-    console.log('SPOTIFY_OK chat=' + chatId + ' ms=' + (Date.now() - t0) + ' size=' + audioFile.size + ' title=' + meta.title);
+    throw lastErr || new Error('CHAIN_FAIL');
   } catch (e) {
+    if (e.message === 'TOO_BIG') { await fail('❌ Audionya kegedean (di atas ±45MB), bot Telegram nggak bisa kirim. Coba lagu lain.'); return; }
     console.log('SPOTIFY_FAIL chat=' + chatId + ' ms=' + (Date.now() - t0) + ' err=' + e.message);
     await fail('❌ Gagal ambil lagu Spotify. Pastikan link-nya lagu (track) Spotify yang publik, lalu coba lagi.');
   } finally {
-    if (audioFile && audioFile.file) { try { fs.unlinkSync(audioFile.file); } catch (_) {} }
+    releaseSlot(chatId);
+    for (const f of tmpFiles) { try { fs.unlinkSync(f); } catch (_) {} }
   }
 }
 
@@ -296,30 +348,27 @@ bot.on('message', async (msg) => {
     if (!d || !d.url) return bot.sendMessage(chatId, 'Link-nya nggak kebaca dari Mini App, coba kirim ulang ya.');
     const fmt = d.format === 'mp3' ? 'mp3' : 'mp4';
     console.log('MINIAPP_DL chat=' + chatId + ' fmt=' + fmt + ' url=' + d.url);
-    if (isSpotifyUrl(d.url)) return handleSpotify(chatId, d.url);
-    if (isVideoUrl(d.url)) return handleDownload(chatId, d.url, fmt);
-    return bot.sendMessage(chatId, 'Link-nya bukan dari YouTube/TikTok/Instagram/Spotify. Coba link lain ya.');
+    const v = validateMediaUrl(d.url);
+    if (!v.ok) return bot.sendMessage(chatId, 'Link-nya bukan dari YouTube/TikTok/Instagram/Spotify. Coba link lain ya.');
+    if (v.platform === 'spotify') return handleSpotify(chatId, v.url);
+    return handleDownload(chatId, v.url, fmt);
   }
   if (!msg.text || msg.text.startsWith('/')) return;
   const chatId = msg.chat.id;
   const text = msg.text.trim();
-  // 0. link Spotify -> langsung MP3 (tanpa pilih format)
-  if (isSpotifyUrl(text)) {
-    delete modes[chatId];
-    return handleSpotify(chatId, text);
-  }
-  // 1. link video selalu didahulukan -> tanya format dulu (MP4/MP3)
-  if (isVideoUrl(text)) {
+  // 0. link media (TikTok/YouTube/Instagram/Spotify) — validasi domain
+  // di-anchor (validateMediaUrl), bukan regex longgar. Spotify langsung MP3,
+  // yang lain tanya format dulu (MP4/MP3).
+  const v = validateMediaUrl(text);
+  if (v.ok) {
     const want = modes[chatId];
-    if (want) {
-      const got = platformOf(text);
-      if (got && got !== want) {
-        const label = { tiktok: 'TikTok', youtube: 'YouTube', instagram: 'Instagram', spotify: 'Spotify' };
-        return bot.sendMessage(chatId, 'Itu link ' + (label[got] || 'lain') + ', kamu pencet DOWNLOAD ' + want.toUpperCase() + '. Kirim link ' + (label[want] || '') + ' ya, atau pencet tombol yang sesuai.');
-      }
-      delete modes[chatId];
+    if (want && v.platform && v.platform !== want) {
+      const label = { tiktok: 'TikTok', youtube: 'YouTube', instagram: 'Instagram', spotify: 'Spotify' };
+      return bot.sendMessage(chatId, 'Itu link ' + (label[v.platform] || 'lain') + ', kamu pencet DOWNLOAD ' + want.toUpperCase() + '. Kirim link ' + (label[want] || '') + ' ya, atau pencet tombol yang sesuai.');
     }
-    pendingDl[chatId] = { url: text };
+    delete modes[chatId];
+    if (v.platform === 'spotify') return handleSpotify(chatId, v.url);
+    pendingDl[chatId] = { url: v.url };
     return bot.sendMessage(chatId, '🎵 Pilih format download:', {
       reply_markup: { inline_keyboard: [[{ text: '🎬 MP4 (video)', callback_data: 'fmt_mp4' }, { text: '🎵 MP3 (audio)', callback_data: 'fmt_mp3' }]] },
     });
@@ -409,8 +458,9 @@ async function cekAntrianMiniApp() {
       const fmt = d.format === 'mp3' ? 'mp3' : 'mp4';
       console.log('MINIAPP_Q chat=' + cid + ' fmt=' + fmt + ' url=' + d.url);
       try {
-        if (isSpotifyUrl(d.url)) await handleSpotify(cid, d.url);
-        else if (isVideoUrl(d.url)) await handleDownload(cid, d.url, fmt);
+        const v = validateMediaUrl(d.url);
+        if (v.platform === 'spotify') await handleSpotify(cid, v.url);
+        else if (v.ok) await handleDownload(cid, v.url, fmt);
         else await bot.sendMessage(cid, 'Link-nya bukan dari YouTube/TikTok/Instagram/Spotify. Coba link lain ya.');
       } catch (e) { console.log('MINIAPP_Q_FAIL chat=' + cid + ' err=' + e.message); }
     }
@@ -421,6 +471,8 @@ async function cekAntrianMiniApp() {
 setInterval(cekAntrianMiniApp, 3000);
 
 (async () => {
+  const backend = await cache.init().catch((e) => { console.log('CACHE init gagal, lanjut tanpa cache: ' + e.message); return 'none'; });
+  console.log('Cache backend: ' + backend + ' (TTL ' + cache.TTL_DAYS + ' hari)');
   const v = await checkYtDlp();
   console.log(v ? 'yt-dlp OK: ' + v : 'yt-dlp TIDAK KETEMU — download akan gagal, install dulu (pip install yt-dlp)');
   console.log('Bot downloader jalan (polling). Owner: ' + OWNER);
