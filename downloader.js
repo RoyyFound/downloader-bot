@@ -12,9 +12,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const YTDLP_BIN_PROJECT = path.join(__dirname, 'bin', 'yt-dlp');
 const YTDLP_BIN_LOCAL = path.join(os.homedir(), '.local/bin/yt-dlp');
-// yt-dlp terpasang di ~/.local/bin (bukan PATH sistem) — cari di sana dulu.
-const YTDLP = process.env.YTDLP_BIN || (fs.existsSync(YTDLP_BIN_LOCAL) ? YTDLP_BIN_LOCAL : 'yt-dlp');
+// Urutan cari yt-dlp: env YTDLP_BIN → ./bin/yt-dlp (diunduh postinstall,
+// ini yang jalan di Altare) → ~/.local/bin/yt-dlp → 'yt-dlp' di PATH.
+const YTDLP = process.env.YTDLP_BIN
+  || (fs.existsSync(YTDLP_BIN_PROJECT) ? YTDLP_BIN_PROJECT : null)
+  || (fs.existsSync(YTDLP_BIN_LOCAL) ? YTDLP_BIN_LOCAL : null)
+  || 'yt-dlp';
 // Format: 18 = YouTube 360p mp4 (1 file), 22 = 720p mp4 (1 file).
 // TikTok/IG: best mp4. Satu file = bisa langsung dikirim Telegram.
 const FORMAT = '18/22/best[ext=mp4]/best';
@@ -466,4 +471,4 @@ function validateCdnUrl(url) {
   return u.toString();
 }
 
-module.exports = { extractDirect, downloadFile, downloadUrlFile, extractAudioInfo, downloadAudioFile, downloadAudioUrlFile, fetchTikwm, fetchSpotifyMeta, isSpotifyUrl, checkYtDlp, isVideoUrl, platformOf, MAX_BYTES, validateMediaUrl, safeJoin, extractDirectClient, downloadFileClient, extractAudioInfoClient, downloadAudioFileClient, cobaltFetch, fetchSsstik, validateCdnUrl };
+module.exports = { extractDirect, downloadFile, downloadUrlFile, extractAudioInfo, downloadAudioFile, downloadAudioUrlFile, fetchTikwm, fetchSpotifyMeta, isSpotifyUrl, checkYtDlp, isVideoUrl, platformOf, MAX_BYTES, validateMediaUrl, safeJoin, extractDirectClient, downloadFileClient, extractAudioInfoClient, downloadAudioFileClient, cobaltFetch, fetchSsstik, validateCdnUrl, YTDLP_BIN: YTDLP };

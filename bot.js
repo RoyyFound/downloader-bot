@@ -7,7 +7,7 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
-const { downloadUrlFile, checkYtDlp, platformOf, MAX_BYTES, validateMediaUrl } = require('./downloader');
+const { downloadUrlFile, checkYtDlp, platformOf, MAX_BYTES, validateMediaUrl, YTDLP_BIN } = require('./downloader');
 const { videoChain, audioChain, spotifyChain, routeCounts, classifyError } = require('./routes');
 const cache = require('./cache');
 
@@ -474,6 +474,6 @@ setInterval(cekAntrianMiniApp, 3000);
   const backend = await cache.init().catch((e) => { console.log('CACHE init gagal, lanjut tanpa cache: ' + e.message); return 'none'; });
   console.log('Cache backend: ' + backend + ' (TTL ' + cache.TTL_DAYS + ' hari)');
   const v = await checkYtDlp();
-  console.log(v ? 'yt-dlp OK: ' + v : 'yt-dlp TIDAK KETEMU — download akan gagal, install dulu (pip install yt-dlp)');
+  console.log(v ? 'yt-dlp OK: ' + v + ' @ ' + YTDLP_BIN : 'yt-dlp TIDAK KETEMU — download akan gagal (postinstall gagal unduh binary, cek log npm install)');
   console.log('Bot downloader jalan (polling). Owner: ' + OWNER);
 })();
