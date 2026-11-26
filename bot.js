@@ -67,10 +67,8 @@ const bot = new TelegramBot(TOKEN, { polling: true });
 const MENU_KB = {
   reply_markup: {
     inline_keyboard: [
-      [{ text: 'DOWNLOAD TIKTOK', callback_data: 'dl_tiktok' }],
-      [{ text: 'DOWNLOAD YT', callback_data: 'dl_yt' }],
-      [{ text: 'DOWNLOAD IG', callback_data: 'dl_ig' }],
-      [{ text: 'DOWNLOAD SPOTIFY 🎵', callback_data: 'dl_spotify' }],
+      [{ text: 'DOWNLOAD TIKTOK', callback_data: 'dl_tiktok', style: 'primary' }, { text: 'DOWNLOAD YT', callback_data: 'dl_yt', style: 'danger' }],
+      [{ text: 'DOWNLOAD IG', callback_data: 'dl_ig', style: 'success' }, { text: 'DOWNLOAD SPOTIFY 🎵', callback_data: 'dl_spotify', style: 'success' }],
     ],
   },
 };
@@ -80,10 +78,8 @@ const MENU_KB = {
 const REPLY_KB = {
   reply_markup: {
     keyboard: [
-      [{ text: 'DOWNLOAD TIKTOK' }],
-      [{ text: 'DOWNLOAD YT' }],
-      [{ text: 'DOWNLOAD IG' }],
-      [{ text: 'DOWNLOAD SPOTIFY' }],
+      [{ text: 'DOWNLOAD TIKTOK', style: 'primary' }, { text: 'DOWNLOAD YT', style: 'danger' }],
+      [{ text: 'DOWNLOAD IG', style: 'success' }, { text: 'DOWNLOAD SPOTIFY', style: 'success' }],
     ],
     resize_keyboard: true,
   },
@@ -370,7 +366,7 @@ bot.on('message', async (msg) => {
     if (v.platform === 'spotify') return handleSpotify(chatId, v.url);
     pendingDl[chatId] = { url: v.url };
     return bot.sendMessage(chatId, '🎵 Pilih format download:', {
-      reply_markup: { inline_keyboard: [[{ text: '🎬 MP4 (video)', callback_data: 'fmt_mp4' }, { text: '🎵 MP3 (audio)', callback_data: 'fmt_mp3' }]] },
+      reply_markup: { inline_keyboard: [[{ text: '🎬 MP4 (video)', callback_data: 'fmt_mp4', style: 'primary' }, { text: '🎵 MP3 (audio)', callback_data: 'fmt_mp3', style: 'success' }]] },
     });
   }
   // 1b. tombol keyboard bawah (ikon kotak) — teksnya sama dengan tombol inline
