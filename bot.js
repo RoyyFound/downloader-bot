@@ -64,6 +64,16 @@ const modes = {}; // chatId -> 'tiktok' | 'youtube' | 'instagram' (tombol downlo
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
+// WhatsApp (Baileys) — satu proses, handler terpisah di wa-bot.js.
+// Kalau modul WA gagal dimuat (mis. Baileys belum ter-install), bot
+// Telegram tetap jalan; WA cukup tidak aktif.
+let wa = null;
+try {
+  wa = require('./wa-bot');
+} catch (e) {
+  console.log('WA disabled (modul gagal dimuat): ' + e.message);
+}
+
 const MENU_KB = {
   reply_markup: {
     inline_keyboard: [
@@ -122,6 +132,17 @@ bot.onText(/\/stats/, async (msg) => {
   } catch (e) {
     bot.sendMessage(msg.chat.id, '📊 Statistik gagal dibaca: ' + e.message);
   }
+});
+bot.onText(/\/pairwa/, async (msg) => {
+  if (msg.chat.id !== OWNER) return;
+  if (!wa) return bot.sendMessage(msg.chat.id, 'WA tidak aktif (modul gagal dimuat).');
+  const st = wa.getWAStatus();
+  if (st.registered) return bot.sendMessage(msg.chat.id, 'WA sudah terhubung, tidak perlu pairing.');
+  if (!st.numberSet) return bot.sendMessage(msg.chat.id, 'WA_NUMBER belum diset di env Altare — isi dulu, lalu /pairwa lagi.');
+  bot.sendMessage(msg.chat.id, '⏳ Minta kode pairing WA…');
+  const r = await wa.requestPairingCodeNow().catch((e) => ({ ok: false, error: e.message }));
+  if (r && r.ok) return bot.sendMessage(msg.chat.id, 'Kode pairing WA: ' + r.code + '\nMasukkan di WA → Perangkat Tertaut → Tautkan Perangkat → "Tautkan dengan nomor telepon". Kode cepat kedaluwarsa, langsung dimasukkan ya.');
+  bot.sendMessage(msg.chat.id, '❌ Gagal minta kode pairing: ' + (r.error || 'tidak diketahui') + '. Cek log Altare.');
 });
 bot.onText(/\/saldo/, (msg) => {
   bot.sendMessage(msg.chat.id, '💎 Download sekarang GRATIS, nggak perlu token lagi. Kirim link videonya aja.');
@@ -473,4 +494,7 @@ setInterval(cekAntrianMiniApp, 3000);
   const v = await checkYtDlp();
   console.log(v ? 'yt-dlp OK: ' + v + ' @ ' + YTDLP_BIN : 'yt-dlp TIDAK KETEMU — download akan gagal (postinstall gagal unduh binary, cek log npm install)');
   console.log('Bot downloader jalan (polling). Owner: ' + OWNER);
+  if (wa) {
+    wa.startWA({ tgBot: bot, owner: OWNER }).catch((e) => console.log('WA start gagal: ' + e.message));
+  }
 })();

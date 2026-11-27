@@ -13,7 +13,7 @@ COPY package.json package-lock.json ./
 # npm install (bukan npm ci — npm ci pernah gagal di Altare)
 RUN npm install --omit=dev
 
-COPY bot.js downloader.js ./
+COPY bot.js downloader.js routes.js cache.js wa-bot.js ./
 
 # yt-dlp ada di PATH (/usr/local/bin/yt-dlp), ffmpeg juga di PATH
 ENV YTDLP_BIN=yt-dlp

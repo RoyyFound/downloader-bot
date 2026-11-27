@@ -31,3 +31,10 @@ OWNER_CHAT_ID=isi_chat_id_kamu
 - Token JANGAN pernah di-commit ke repo. `.env` sudah ada di `.gitignore`.
 - `users.json` dan `stats.json` dibuat otomatis pas bot jalan (data lokal, ga ikut ke-push).
 - Kalau bot dipindah dari tempat lama ke sini, matikan dulu bot yang lama — dua bot polling pakai token yang sama bakal rebutan dan jadi error.
+
+## WhatsApp (Baileys) — TEST
+Env tambahan: `WA_NUMBER` (nomor bot WA tanpa '+', contoh `6281234567890`). Kalau kosong, WA mati, Telegram tetap jalan.
+Pairing: saat startup (selama belum terdaftar) bot minta pairing code lalu kirim kodenya ke owner lewat DM Telegram; atau kirim `/pairwa` di Telegram (owner saja) untuk minta kode baru kapan pun. Masukkan kode di WA: Pengaturan → Perangkat Tertaut → Tautkan Perangkat → "Tautkan dengan nomor telepon".
+Sesi di `wa-auth/` (gitignore) — INI yang dites: apakah Altare menyimpan file ini antar deploy. Kalau tiap deploy WA minta pairing ulang, berarti Altare tidak menyimpan file → WA harus jalan di tempat lain (VSPhone, seperti bot confes).
+Risiko: Baileys tidak resmi — nomor bisa ke-ban; pakai nomor cadangan, bukan nomor utama.
+Perintah WA: kirim link langsung (MP4 default, tambah kata "mp3" untuk audio), `/start` untuk panduan.

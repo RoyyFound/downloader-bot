@@ -12,3 +12,4 @@ stats.json
 cache.db
 cache.db-journal
 !.env.example
+wa-auth/
