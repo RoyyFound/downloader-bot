@@ -31,7 +31,8 @@
 //     (video+audio 11,8MB); web/android_music punya audio-only (3,3MB)
 //     tapi total waktunya sama (variansi menutupi).
 //   Bilibili (27 Nov 2026, DALAM PENGUJIAN di Altare): 1 jalur file (yt-dlp
-//     + merge ffmpeg, 720 dulu lalu 360 kalau >45MB) + 1 jalur audio MP3.
+//     + merge ffmpeg, 720 dulu lalu 360 kalau >45MB; kalau 360 pun masih
+//     >45MB, file dipecah jadi beberapa bagian <=45MB) + 1 jalur audio MP3.
 //     Mode URL TIDAK dipakai — stream Bilibili DASH video-only + audio-only,
 //     extractDirect cuma dapat video tanpa suara. Dari VM Muse ke-block geo
 //     (Bstation cuma SEA), dari VMOS Hongkong lolos (format s.d. 720p).

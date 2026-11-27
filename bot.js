@@ -253,6 +253,15 @@ async function handleDownload(chatId, url, format, statusMsgId) {
               fileId = msg.video && msg.video.file_id;
               size = dl.size;
             }
+          } else if (res.files && res.files.length) {
+            // video dipecah jadi beberapa bagian (tiap bagian <=45MB) —
+            // kirim satu per satu biar tetap kekirim utuh.
+            for (let i = 0; i < res.files.length; i++) {
+              tmpFiles.push(res.files[i]);
+              const cap = (title ? title.slice(0, 180) : 'Video kamu') + ' (bagian ' + (i + 1) + '/' + res.files.length + ')';
+              const msg = await bot.sendVideo(chatId, res.files[i], { caption: cap });
+              if (i === 0) fileId = msg.video && msg.video.file_id;
+            }
           } else {
             if (res.size > MAX_BYTES) { await fail(TOO_BIG_MSG); return; }
             tmpFiles.push(res.file);
@@ -270,7 +279,8 @@ async function handleDownload(chatId, url, format, statusMsgId) {
           fileId = msg.audio && msg.audio.file_id;
         }
         // Berhasil terkirim → simpan ke cache (file_id Telegram) + hitung.
-        if (fileId) await cache.setCache(plat, url, fmt, fileId, title, size, res.route).catch(() => {});
+        // Video pecah-bagian tidak di-cache (file_id cuma bagian pertama).
+        if (fileId && !(res.files && res.files.length)) await cache.setCache(plat, url, fmt, fileId, title, size, res.route).catch(() => {});
         await cache.incDownloads().catch(() => {});
         await done();
         console.log('DL_OK chat=' + chatId + ' fmt=' + fmt + ' route=' + res.route + ' ms=' + (Date.now() - t0) + ' size=' + size + ' title=' + (title || '-'));

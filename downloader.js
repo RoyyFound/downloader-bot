@@ -98,13 +98,41 @@ function downloadFile(url, chatId) {
   });
 }
 
+// Pecah satu file video jadi beberapa bagian (target ~32MB per bagian,
+// di bawah batas 45MB bot) pakai ffmpeg tanpa re-encode (copy) — cepat.
+// Dipakai Bilibili kalau 360p pun masih kegedean. Kembalikan array path.
+function splitFile(file, chatId) {
+  const dir = path.dirname(file);
+  return new Promise((resolve, reject) => {
+    execFile('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', file], { timeout: 30000 }, (err, stdout) => {
+      if (err) return reject(new Error('split gagal: ffprobe ' + (err.message || 'error')));
+      const dur = parseFloat(String(stdout || '').trim());
+      if (!dur || dur <= 0) return reject(new Error('split gagal: durasi tidak kebaca'));
+      const size = fs.statSync(file).size;
+      const parts = Math.ceil(size / (32 * 1024 * 1024));
+      if (parts <= 1) return resolve([file]);
+      const segTime = Math.max(10, Math.ceil(dur / parts));
+      const outTpl = path.join(dir, 'part%02d.mp4');
+      execFile('ffmpeg', ['-y', '-i', file, '-c', 'copy', '-map', '0', '-f', 'segment', '-segment_time', String(segTime), '-reset_timestamps', '1', outTpl], { timeout: 180000 }, (err2) => {
+        if (err2) return reject(new Error('split gagal: ffmpeg ' + (err2.message || 'error')));
+        const all = fs.readdirSync(dir).filter((f) => f.startsWith('part') && f.endsWith('.mp4')).sort();
+        if (!all.length) return reject(new Error('split gagal: tidak ada bagian'));
+        const files = all.map((f) => path.join(dir, f));
+        for (const f of files) { if (fs.statSync(f).size > MAX_BYTES) return reject(new Error('TOO_BIG: satu bagian masih >45MB')); }
+        try { fs.unlinkSync(file); } catch (_) {}
+        resolve(files);
+      });
+    });
+  });
+}
+
 // ---------- Bilibili: download file + merge, 720 dulu lalu 360 kalau kegedean ----------
 function downloadBiliFile(url, chatId) {
   const dir = path.join(__dirname, 'tmp_dl', String(chatId));
   fs.mkdirSync(dir, { recursive: true });
   const outTpl = path.join(dir, 'dl.%(ext)s');
   // bersihkan sisa percobaan sebelumnya di folder chat ini
-  try { for (const f of fs.readdirSync(dir).filter((x) => x.startsWith('dl.'))) { try { fs.unlinkSync(path.join(dir, f)); } catch (_) {} } } catch (_) {}
+  try { for (const f of fs.readdirSync(dir).filter((x) => x.startsWith('dl.') || x.startsWith('part'))) { try { fs.unlinkSync(path.join(dir, f)); } catch (_) {} } } catch (_) {}
   const formats = [FORMAT_DL_BILI_720, FORMAT_DL_BILI_360];
   const coba = (i) => {
     if (i >= formats.length) return Promise.reject(new Error('TOO_BIG: file kegedean (>45MB) bahkan di 360p'));
@@ -116,9 +144,14 @@ function downloadBiliFile(url, chatId) {
       const file = path.join(dir, files[0]);
       const size = fs.statSync(file).size;
       if (size > MAX_BYTES) {
-        try { fs.unlinkSync(file); } catch (_) {}
-        console.log('BILI_TOO_BIG coba=' + i + ' size=' + size + ' — turun resolusi');
-        return coba(i + 1);
+        if (i + 1 < formats.length) {
+          try { fs.unlinkSync(file); } catch (_) {}
+          console.log('BILI_TOO_BIG coba=' + i + ' size=' + size + ' — turun resolusi');
+          return coba(i + 1);
+        }
+        // mentok di 360p tapi masih kegedean — pecah jadi beberapa bagian
+        console.log('BILI_SPLIT size=' + size);
+        return splitFile(file, chatId).then((parts) => ({ files: parts, size }));
       }
       return { file, size };
     });
@@ -561,4 +594,4 @@ function validateCdnUrl(url) {
   return u.toString();
 }
 
-module.exports = { extractDirect, downloadFile, downloadBiliFile, downloadUrlFile, extractAudioInfo, downloadAudioFile, downloadAudioUrlFile, fetchTikwm, fetchSpotifyMeta, isSpotifyUrl, checkYtDlp, isVideoUrl, platformOf, MAX_BYTES, validateMediaUrl, safeJoin, extractDirectClient, downloadFileClient, extractAudioInfoClient, downloadAudioFileClient, cobaltFetch, fetchSsstik, validateCdnUrl, validateVideoUrl, YTDLP_BIN: YTDLP };
+module.exports = { extractDirect, downloadFile, downloadBiliFile, splitFile, downloadUrlFile, extractAudioInfo, downloadAudioFile, downloadAudioUrlFile, fetchTikwm, fetchSpotifyMeta, isSpotifyUrl, checkYtDlp, isVideoUrl, platformOf, MAX_BYTES, validateMediaUrl, safeJoin, extractDirectClient, downloadFileClient, extractAudioInfoClient, downloadAudioFileClient, cobaltFetch, fetchSsstik, validateCdnUrl, validateVideoUrl, YTDLP_BIN: YTDLP };
