@@ -18,7 +18,7 @@
 //   registered yang utuh (me JANGAN dikosongkan).
 const fs = require('fs');
 const path = require('path');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, fetchLatestWaWebVersion } = require('@whiskeysockets/baileys');
 const { videoChain, audioChain, spotifyChain, classifyError } = require('./routes');
 const { validateMediaUrl, downloadUrlFile, MAX_BYTES } = require('./downloader');
 
@@ -89,6 +89,7 @@ function createSocket() {
     logger: waLogger,
     browser: ['Downloader Bot', 'Chrome', '120.0'],
     keepAliveIntervalMs: 20000,
+    qrTimeout: 120000,
   });
   s.ev.on('creds.update', saveCredsFn);
   s.ev.on('messages.upsert', onMessagesUpsert);
@@ -183,7 +184,11 @@ async function sendCodeToOwner(code) {
 async function initAuth() {
   if (authState) return;
   try {
-    version = (await fetchLatestBaileysVersion()).version;
+    try {
+      version = (await fetchLatestWaWebVersion()).version;
+    } catch (_) {
+      version = (await fetchLatestBaileysVersion()).version;
+    }
     console.log('WA_VERSION: ' + version.join('.'));
   } catch (e) {
     console.log('WA_VERSION_FETCH_FAIL: pakai versi bawaan lib (' + e.message + ')');
