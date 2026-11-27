@@ -26,7 +26,7 @@ const AUTH_DIR = path.join(__dirname, 'wa-auth');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let waLogger;
-try { waLogger = require('pino')({ level: 'silent' }); } catch (_) { waLogger = undefined; }
+try { waLogger = require('pino')({ level: 'error' }); } catch (_) { waLogger = undefined; }
 
 // Nomor dari env, normalisasi ke digit saja (tanpa '+', tanpa spasi).
 // '0...' di depan -> '62...'. Kosong = WA tidak aktif (Telegram tetap jalan).
@@ -88,6 +88,7 @@ function createSocket() {
     printQRInTerminal: false,
     logger: waLogger,
     browser: ['Downloader Bot', 'Chrome', '120.0'],
+    keepAliveIntervalMs: 20000,
   });
   s.ev.on('creds.update', saveCredsFn);
   s.ev.on('messages.upsert', onMessagesUpsert);
