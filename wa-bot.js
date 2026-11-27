@@ -105,7 +105,7 @@ async function onConnectionUpdate(s, u) {
     qrSeen = true;
     latestQr = u.qr;
     console.log('WA_QR_READY: server mengirim pair-device (mode REGISTRATION ok)');
-    sendQrToOwner(u.qr);
+    // QR TIDAK dikirim otomatis — hanya saat /pairwa (anti-spam DM owner)
   }
   if (u.isNewLogin) {
     linked = true;
