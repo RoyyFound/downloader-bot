@@ -193,6 +193,9 @@ async function initAuth() {
   } catch (e) {
     console.log('WA_VERSION_FETCH_FAIL: pakai versi bawaan lib (' + e.message + ')');
   }
+  if (process.env.WA_WIPE_AUTH === '1') {
+    try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); console.log('WA_AUTH_WIPED'); } catch (_) {}
+  }
   const r = await useMultiFileAuthState(AUTH_DIR);
   authState = r.state;
   saveCredsFn = r.saveCreds;
