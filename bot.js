@@ -392,7 +392,12 @@ bot.on('message', async (msg) => {
   // 0. link media (TikTok/YouTube/Instagram/Spotify/Bilibili) — validasi domain
   // di-anchor (validateMediaUrl), bukan regex longgar. Spotify langsung MP3,
   // yang lain tanya format dulu (MP4/MP3).
-  const v = validateMediaUrl(text);
+  // Ambil URL pertama dari pesan: orang sering paste "judul\nlink" (hasil
+  // share/copy dari Bilibili/dll), bukan link polos — tanpa ini link valid
+  // pun ditolak karena seluruh pesan bukan URL.
+  const urlMatch = text.match(/https?:\/\/\S+/i);
+  const firstUrl = urlMatch ? urlMatch[0].replace(/[)\].,;]+$/, '') : text;
+  const v = validateMediaUrl(firstUrl);
   if (v.ok) {
     const want = modes[chatId];
     if (want && v.platform && v.platform !== want) {
