@@ -30,6 +30,11 @@
 //     tidak diubah, user minta MP3). Android client cuma punya format 18
 //     (video+audio 11,8MB); web/android_music punya audio-only (3,3MB)
 //     tapi total waktunya sama (variansi menutupi).
+//   Bilibili (27 Nov 2026, DALAM PENGUJIAN di Altare): 1 jalur file (yt-dlp
+//     + merge ffmpeg, 720 dulu lalu 360 kalau >45MB) + 1 jalur audio MP3.
+//     Mode URL TIDAK dipakai — stream Bilibili DASH video-only + audio-only,
+//     extractDirect cuma dapat video tanpa suara. Dari VM Muse ke-block geo
+//     (Bstation cuma SEA), dari VMOS Hongkong lolos (format s.d. 720p).
 // Mati / tidak terverifikasi (TIDAK dipakai):
 //   cobalt API publik — sekarang minta JWT (error.api.auth.jwt.missing);
 //     jalur ada di kode tapi NONAKTIF kecuali env COBALT_API_KEY diset.
@@ -39,7 +44,7 @@
 //     api.tikwm.com (gagal), yt-dlp client ios/tv_embedded/mweb/android_music
 //     (gagal buat Shorts), IG __a=1 (404), spotifydown (endpoint tidak ketemu).
 const {
-  extractDirect, downloadFile, downloadUrlFile, extractAudioInfo, downloadAudioFile,
+  extractDirect, downloadFile, downloadBiliFile, downloadUrlFile, extractAudioInfo, downloadAudioFile,
   downloadAudioUrlFile, fetchTikwm, fetchSpotifyMeta,
   extractDirectClient, downloadFileClient, extractAudioInfoClient, downloadAudioFileClient,
   cobaltFetch, fetchSsstik, validateVideoUrl,
@@ -52,6 +57,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function classifyError(e) {
   const m = String((e && e.message) || e || '');
   if (/TIKWM_LIMIT/i.test(m)) return 'LIMIT';
+  if (/TOO_BIG/i.test(m)) return 'TOO_BIG';
+  if (/geo restriction|not available from your location|geo-block/i.test(m)) return 'GEO';
   if (/sign in to confirm|not a bot|bot-check|429|too many requests/i.test(m)) return 'BOTCHECK';
   if (/TIKWM_DOWN/i.test(m)) return 'DOWN';
   if (/private|privat|deleted|not found|404|unavailable|login-only|tidak ada|tidak ketemu/i.test(m)) return 'NOTFOUND';
@@ -85,6 +92,10 @@ const VIDEO_ROUTES = {
     { id: 'ytdlp-web-file', run: async (url, chatId) => { const d = await downloadFile(url, chatId); return { mode: 'file', ...d, title: '' }; } },
     { id: 'cobalt-video', gated: true, run: async (url) => { const d = await cobaltFetch(url, false); return { mode: 'url', ...d }; } },
   ],
+  // Bilibili: HANYA file (alasan di atas). 1 jalur, jujur apa adanya.
+  bilibili: [
+    { id: 'ytdlp-bili-file', run: async (url, chatId) => { const d = await downloadBiliFile(url, chatId); return { mode: 'file', ...d, title: '' }; } },
+  ],
 };
 
 // Jalur audio (MP3). Hasil selalu file lokal.
@@ -103,6 +114,9 @@ const AUDIO_ROUTES = {
     { id: 'ytdlp-android-audio', run: async (url, chatId) => { const info = await extractAudioInfoClient(url, 'android'); const f = await downloadAudioFileClient(url, chatId, null, 'android'); return { ...f, performer: info.uploader || '', duration: info.duration || 0 }; } },
     { id: 'ytdlp-web-audio', run: async (url, chatId) => { const info = await extractAudioInfo(url); const f = await downloadAudioFile(url, chatId); return { ...f, performer: info.uploader || '', duration: info.duration || 0 }; } },
     { id: 'cobalt-audio', gated: true, run: async (url, chatId) => { const d = await cobaltFetch(url, true); const f = await downloadAudioUrlFile(d.url, chatId, 'audio'); return { ...f, performer: '', duration: 0 }; } },
+  ],
+  bilibili: [
+    { id: 'ytdlp-bili-audio', run: async (url, chatId) => { const info = await extractAudioInfo(url); const f = await downloadAudioFile(url, chatId); return { ...f, performer: info.uploader || '', duration: info.duration || 0 }; } },
   ],
 };
 

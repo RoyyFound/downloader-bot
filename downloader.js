@@ -29,6 +29,13 @@ const FORMAT = '18/22/best[ext=mp4]/best';
 // "satu file berisi video+audio" tidak menemukan apa-apa ("Requested format
 // is not available"). ffmpeg tersedia di mesin ini, jadi merge jalan.
 const FORMAT_DL = 'bv*[height<=720][ext=mp4]+ba[ext=m4a]/bv*[height<=720]+ba/b[height<=720]/b';
+// Bilibili (Bstation bilibili.tv + bilibili.com): stream DASH video-only +
+// audio-only, TIDAK ada format progresif — mode URL (extractDirect) cuma
+// dapat video tanpa suara, jadi Bilibili HANYA lewat download file + merge.
+// 720p satu episode ~140MB > batas 45MB bot, jadi coba 720 dulu, kalau
+// hasil >45MB hapus lalu ulangi di 360p (hevc, ~32MB + audio muat).
+const FORMAT_DL_BILI_720 = 'bv*[height<=720][ext=mp4]+ba[ext=m4a]/bv*[height<=720]+ba/b[height<=720]/b';
+const FORMAT_DL_BILI_360 = 'bv*[height<=360][vcodec*=hev][ext=mp4]+ba[ext=m4a]/bv*[height<=360][vcodec*=hev]+ba/bv*[height<=360][ext=mp4]+ba[ext=m4a]/bv*[height<=360]+ba/b[height<=360]/b';
 const MAX_BYTES = 45 * 1024 * 1024; // batas aman di bawah limit bot Telegram 50MB
 
 // Jaringan di VM ini kadang ngadat (proxy suka socket hang up) — yt-dlp bisa
@@ -87,6 +94,37 @@ function downloadFile(url, chatId) {
     return { file, size };
   }).catch((err) => {
     if (err.message && err.message.startsWith('download gagal')) throw err;
+    throw new Error('download gagal: ' + (err.killed ? 'timeout' : (err.message || 'yt-dlp error')));
+  });
+}
+
+// ---------- Bilibili: download file + merge, 720 dulu lalu 360 kalau kegedean ----------
+function downloadBiliFile(url, chatId) {
+  const dir = path.join(__dirname, 'tmp_dl', String(chatId));
+  fs.mkdirSync(dir, { recursive: true });
+  const outTpl = path.join(dir, 'dl.%(ext)s');
+  // bersihkan sisa percobaan sebelumnya di folder chat ini
+  try { for (const f of fs.readdirSync(dir).filter((x) => x.startsWith('dl.'))) { try { fs.unlinkSync(path.join(dir, f)); } catch (_) {} } } catch (_) {}
+  const formats = [FORMAT_DL_BILI_720, FORMAT_DL_BILI_360];
+  const coba = (i) => {
+    if (i >= formats.length) return Promise.reject(new Error('TOO_BIG: file kegedean (>45MB) bahkan di 360p'));
+    const args = ['--no-playlist', '-f', formats[i], '--merge-output-format', 'mp4', '--socket-timeout', '30', '-o', outTpl, '--no-warnings', url];
+    return execYtDlp(args, 120000, 2).then(() => {
+      const all = fs.readdirSync(dir).filter((f) => f.startsWith('dl.'));
+      const files = all.filter((f) => f.endsWith('.mp4')).concat(all.filter((f) => !f.endsWith('.mp4')));
+      if (!files.length) throw new Error('download gagal: file tidak ketemu');
+      const file = path.join(dir, files[0]);
+      const size = fs.statSync(file).size;
+      if (size > MAX_BYTES) {
+        try { fs.unlinkSync(file); } catch (_) {}
+        console.log('BILI_TOO_BIG coba=' + i + ' size=' + size + ' — turun resolusi');
+        return coba(i + 1);
+      }
+      return { file, size };
+    });
+  };
+  return coba(0).catch((err) => {
+    if (err.message && (err.message.startsWith('download gagal') || err.message.startsWith('TOO_BIG'))) throw err;
     throw new Error('download gagal: ' + (err.killed ? 'timeout' : (err.message || 'yt-dlp error')));
   });
 }
@@ -313,7 +351,7 @@ function checkYtDlp() {
 
 function isVideoUrl(text) {
   if (!text || typeof text !== 'string') return false;
-  return /(tiktok\.com|vt\.tiktok\.com|youtube\.com|youtu\.be|instagram\.com)\/\S+/i.test(text.trim());
+  return /(tiktok\.com|vt\.tiktok\.com|youtube\.com|youtu\.be|instagram\.com|bilibili\.tv|bilibili\.com)\/\S+/i.test(text.trim());
 }
 
 function platformOf(text) {
@@ -321,6 +359,7 @@ function platformOf(text) {
   if (/tiktok\.com|vt\.tiktok\.com/i.test(text)) return 'tiktok';
   if (/youtube\.com|youtu\.be/i.test(text)) return 'youtube';
   if (/instagram\.com/i.test(text)) return 'instagram';
+  if (/bilibili\.tv|bilibili\.com/i.test(text)) return 'bilibili';
   return null;
 }
 
@@ -335,6 +374,7 @@ const ALLOWED_HOSTS = new Set([
   'youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be',
   'music.youtube.com',
   'instagram.com', 'www.instagram.com',
+  'bilibili.tv', 'www.bilibili.tv', 'bilibili.com', 'www.bilibili.com', 'm.bilibili.com',
   'open.spotify.com',
 ]);
 function isPrivateIp(host) {
@@ -361,6 +401,7 @@ function validateMediaUrl(text) {
   if (/tiktok\.com$/.test(host)) platform = 'tiktok';
   else if (/youtube\.com$/.test(host) || host === 'youtu.be') platform = 'youtube';
   else if (/instagram\.com$/.test(host)) platform = 'instagram';
+  else if (/bilibili\.(tv|com)$/.test(host)) platform = 'bilibili';
   else if (host === 'open.spotify.com') platform = 'spotify';
   return { ok: true, platform, url: u.toString() };
 }
@@ -517,4 +558,4 @@ function validateCdnUrl(url) {
   return u.toString();
 }
 
-module.exports = { extractDirect, downloadFile, downloadUrlFile, extractAudioInfo, downloadAudioFile, downloadAudioUrlFile, fetchTikwm, fetchSpotifyMeta, isSpotifyUrl, checkYtDlp, isVideoUrl, platformOf, MAX_BYTES, validateMediaUrl, safeJoin, extractDirectClient, downloadFileClient, extractAudioInfoClient, downloadAudioFileClient, cobaltFetch, fetchSsstik, validateCdnUrl, validateVideoUrl, YTDLP_BIN: YTDLP };
+module.exports = { extractDirect, downloadFile, downloadBiliFile, downloadUrlFile, extractAudioInfo, downloadAudioFile, downloadAudioUrlFile, fetchTikwm, fetchSpotifyMeta, isSpotifyUrl, checkYtDlp, isVideoUrl, platformOf, MAX_BYTES, validateMediaUrl, safeJoin, extractDirectClient, downloadFileClient, extractAudioInfoClient, downloadAudioFileClient, cobaltFetch, fetchSsstik, validateCdnUrl, validateVideoUrl, YTDLP_BIN: YTDLP };

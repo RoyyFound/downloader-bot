@@ -1,4 +1,4 @@
-// bot.js — Bot Telegram Downloader Video (TikTok / YouTube / Instagram).
+// bot.js — Bot Telegram Downloader Video (TikTok / YouTube / Instagram / Bilibili).
 // GRATIS — tanpa token (diubah 2026-11-13 atas perintah user).
 // Alur: /start -> menu (teks saja) -> kirim link video -> video kekirim.
 // Perintah /tiktok /youtube /instagram /help juga muncul di
@@ -60,7 +60,7 @@ function releaseSlot(chatId) {
   activeDownloads = Math.max(0, activeDownloads - 1);
 }
 
-const modes = {}; // chatId -> 'tiktok' | 'youtube' | 'instagram' (tombol download yang dipencet)
+const modes = {}; // chatId -> 'tiktok' | 'youtube' | 'instagram' | 'bilibili' (tombol download yang dipencet)
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
@@ -79,6 +79,7 @@ const MENU_KB = {
     inline_keyboard: [
       [{ text: 'DOWNLOAD TIKTOK', callback_data: 'dl_tiktok', style: 'primary' }, { text: 'DOWNLOAD YT', callback_data: 'dl_yt', style: 'danger' }],
       [{ text: 'DOWNLOAD IG', callback_data: 'dl_ig', style: 'success' }, { text: 'DOWNLOAD SPOTIFY 🎵', callback_data: 'dl_spotify', style: 'success' }],
+      [{ text: 'DOWNLOAD BILIBILI', callback_data: 'dl_bili', style: 'primary' }],
       [{ text: '💬 Support', url: 'https://t.me/RoyyFound' }],
     ],
   },
@@ -91,6 +92,7 @@ const REPLY_KB = {
     keyboard: [
       [{ text: 'DOWNLOAD TIKTOK', style: 'primary' }, { text: 'DOWNLOAD YT', style: 'danger' }],
       [{ text: 'DOWNLOAD IG', style: 'success' }, { text: 'DOWNLOAD SPOTIFY', style: 'success' }],
+      [{ text: 'DOWNLOAD BILIBILI', style: 'primary' }],
     ],
     resize_keyboard: true,
   },
@@ -98,10 +100,10 @@ const REPLY_KB = {
 
 const HELP = '📝 Panduan — GRATIS, tanpa token\n\n'
   + '1️⃣ Pencet tombol DOWNLOAD sesuai platform, lalu kirim link-nya.\n'
-  + '2️⃣ Video (TikTok/YouTube/Instagram): pilih format MP4 (video) atau MP3 (audio). Video dikirim ke kamu (maksimal ±15 detik).\n'
+  + '2️⃣ Video (TikTok/YouTube/Instagram/Bilibili): pilih format MP4 (video) atau MP3 (audio). Video dikirim ke kamu (maksimal ±15 detik).\n'
   + '3️⃣ Spotify: kirim link lagunya, langsung jadi MP3 (audio saja, judul ikut lagu Spotify).\n\n'
   + '⚠️ Video/audio di atas ±45MB tidak bisa dikirim bot Telegram.\n\n'
-  + 'Perintah cepat (tombol Menu di bawah): /tiktok /youtube /instagram /spotify';
+  + 'Perintah cepat (tombol Menu di bawah): /tiktok /youtube /instagram /spotify /bilibili';
 
 function sendWelcome(chatId, disp) {
   const txt = 'Haii 👋 ' + (disp || 'Kak') + ' , Silahkan pilih menu dibawah untuk melanjutkan';
@@ -152,7 +154,7 @@ bot.onText(/\/help/, (msg) => { bot.sendMessage(msg.chat.id, HELP, MENU_KB); });
 // ---------- perintah Menu (dipakai tombol inline + perintah /...) ----------
 const GRATIS_MSG = '💎 Download sekarang GRATIS, nggak perlu top up token lagi. Kirim link videonya aja.';
 async function askDownload(chatId, plat) {
-  const label = plat === 'tiktok' ? 'TikTok' : plat === 'youtube' ? 'YouTube' : plat === 'instagram' ? 'Instagram' : plat === 'spotify' ? 'Spotify' : 'TikTok / YouTube / Instagram';
+  const label = plat === 'tiktok' ? 'TikTok' : plat === 'youtube' ? 'YouTube' : plat === 'instagram' ? 'Instagram' : plat === 'spotify' ? 'Spotify' : plat === 'bilibili' ? 'Bilibili' : 'TikTok / YouTube / Instagram';
   if (plat) modes[chatId] = plat;
   return bot.sendMessage(chatId, '📥 Kirim link ' + label + ' kamu.');
 }
@@ -161,6 +163,7 @@ bot.onText(/\/tiktok/, (msg) => { askDownload(msg.chat.id, 'tiktok'); });
 bot.onText(/\/youtube/, (msg) => { askDownload(msg.chat.id, 'youtube'); });
 bot.onText(/\/instagram/, (msg) => { askDownload(msg.chat.id, 'instagram'); });
 bot.onText(/\/spotify/, (msg) => { askDownload(msg.chat.id, 'spotify'); });
+bot.onText(/\/bilibili/, (msg) => { askDownload(msg.chat.id, 'bilibili'); });
 
 // ---------- download ----------
 // Pesan gagal JUJUR berdasarkan penyebab — bukan "video privat" kalau yang
@@ -170,6 +173,8 @@ function failTextFor(err) {
   const cls = (err && err.cls) || classifyError(err);
   if (failures.some((f) => f.cls === 'LIMIT')) return '❌ API TikTok lagi kena limit harian (jatah gratis 10.000/hari, dipake bareng). Limit reset tiap jam 07:00 WIB — coba lagi besok pagi. YouTube/Instagram tetap jalan.';
   if (cls === 'BOTCHECK' || failures.some((f) => f.cls === 'BOTCHECK')) return '❌ YouTube lagi nge-blokir download dari server bot (bot-check), bukan salah link kamu. Semua jalur cadangan juga kena — coba lagi beberapa menit lagi.';
+  if (cls === 'GEO' || failures.some((f) => f.cls === 'GEO')) return '❌ Video ini dibatasi wilayah (geo-block) dari server bot — Bstation cuma buat Asia Tenggara, server bot di luar itu. Coba link bilibili.com (BV), itu biasanya tidak dibatasi wilayah.';
+  if (cls === 'TOO_BIG' || failures.some((f) => f.cls === 'TOO_BIG')) return TOO_BIG_MSG;
   if (failures.some((f) => f.cls === 'DOWN')) return '❌ Server API TikTok (tikwm) lagi down/error, bukan salah link kamu. Coba lagi nanti. YouTube/Instagram tetap jalan.';
   if (cls === 'NOTFOUND' || failures.some((f) => f.cls === 'NOTFOUND')) return '❌ Videonya nggak ketemu / privat / login-only. Pastikan link-nya publik.';
   if (cls === 'NETWORK' || failures.some((f) => f.cls === 'NETWORK')) return '❌ Koneksi ke server video lagi bermasalah. Coba lagi bentar.';
@@ -184,7 +189,7 @@ async function handleDownload(chatId, url, format, statusMsgId) {
   // di-anchor — link jebakan seperti https://jahat.com/?x=youtube.com lolos.
   const v = validateMediaUrl(url);
   if (!v.ok) {
-    const txt = '❌ Link nggak bisa diproses (' + v.reason + '). Kirim link TikTok / YouTube / Instagram yang publik ya.';
+    const txt = '❌ Link nggak bisa diproses (' + v.reason + '). Kirim link TikTok / YouTube / Instagram / Bilibili yang publik ya.';
     if (statusMsgId) return bot.editMessageText(txt, { chat_id: chatId, message_id: statusMsgId }).catch(() => {});
     return bot.sendMessage(chatId, txt);
   }
@@ -367,21 +372,21 @@ bot.on('message', async (msg) => {
     const fmt = d.format === 'mp3' ? 'mp3' : 'mp4';
     console.log('MINIAPP_DL chat=' + chatId + ' fmt=' + fmt + ' url=' + d.url);
     const v = validateMediaUrl(d.url);
-    if (!v.ok) return bot.sendMessage(chatId, 'Link-nya bukan dari YouTube/TikTok/Instagram/Spotify. Coba link lain ya.');
+    if (!v.ok) return bot.sendMessage(chatId, 'Link-nya bukan dari YouTube/TikTok/Instagram/Spotify/Bilibili. Coba link lain ya.');
     if (v.platform === 'spotify') return handleSpotify(chatId, v.url);
     return handleDownload(chatId, v.url, fmt);
   }
   if (!msg.text || msg.text.startsWith('/')) return;
   const chatId = msg.chat.id;
   const text = msg.text.trim();
-  // 0. link media (TikTok/YouTube/Instagram/Spotify) — validasi domain
+  // 0. link media (TikTok/YouTube/Instagram/Spotify/Bilibili) — validasi domain
   // di-anchor (validateMediaUrl), bukan regex longgar. Spotify langsung MP3,
   // yang lain tanya format dulu (MP4/MP3).
   const v = validateMediaUrl(text);
   if (v.ok) {
     const want = modes[chatId];
     if (want && v.platform && v.platform !== want) {
-      const label = { tiktok: 'TikTok', youtube: 'YouTube', instagram: 'Instagram', spotify: 'Spotify' };
+      const label = { tiktok: 'TikTok', youtube: 'YouTube', instagram: 'Instagram', spotify: 'Spotify', bilibili: 'Bilibili' };
       return bot.sendMessage(chatId, 'Itu link ' + (label[v.platform] || 'lain') + ', kamu pencet DOWNLOAD ' + want.toUpperCase() + '. Kirim link ' + (label[want] || '') + ' ya, atau pencet tombol yang sesuai.');
     }
     delete modes[chatId];
@@ -397,8 +402,9 @@ bot.on('message', async (msg) => {
   if (text === 'DOWNLOAD YT') return askDownload(chatId, 'youtube');
   if (text === 'DOWNLOAD IG') return askDownload(chatId, 'instagram');
   if (text === 'DOWNLOAD SPOTIFY') return askDownload(chatId, 'spotify');
+  if (text === 'DOWNLOAD BILIBILI') return askDownload(chatId, 'bilibili');
   // 2. teks lain -> arahkan
-  bot.sendMessage(chatId, 'Kirim link video TikTok / YouTube / Instagram, atau pencet tombol di bawah.', MENU_KB);
+  bot.sendMessage(chatId, 'Kirim link video TikTok / YouTube / Instagram / Bilibili, atau pencet tombol di bawah.', MENU_KB);
 });
 
 // ---------- tombol ----------
@@ -417,8 +423,8 @@ bot.on('callback_query', async (q) => {
     delete pendingDl[chatId];
     return handleDownload(chatId, p.url, data === 'fmt_mp3' ? 'mp3' : 'mp4', q.message.message_id);
   }
-  if (data === 'dl_tiktok' || data === 'dl_yt' || data === 'dl_ig' || data === 'dl_spotify' || data === 'menu_dl') {
-    const plat = data === 'dl_tiktok' ? 'tiktok' : data === 'dl_yt' ? 'youtube' : data === 'dl_ig' ? 'instagram' : data === 'dl_spotify' ? 'spotify' : null;
+  if (data === 'dl_tiktok' || data === 'dl_yt' || data === 'dl_ig' || data === 'dl_spotify' || data === 'dl_bili' || data === 'menu_dl') {
+    const plat = data === 'dl_tiktok' ? 'tiktok' : data === 'dl_yt' ? 'youtube' : data === 'dl_ig' ? 'instagram' : data === 'dl_spotify' ? 'spotify' : data === 'dl_bili' ? 'bilibili' : null;
     return askDownload(chatId, plat);
   }
   if (data === 'menu_help') {
@@ -479,7 +485,7 @@ async function cekAntrianMiniApp() {
         const v = validateMediaUrl(d.url);
         if (v.platform === 'spotify') await handleSpotify(cid, v.url);
         else if (v.ok) await handleDownload(cid, v.url, fmt);
-        else await bot.sendMessage(cid, 'Link-nya bukan dari YouTube/TikTok/Instagram/Spotify. Coba link lain ya.');
+        else await bot.sendMessage(cid, 'Link-nya bukan dari YouTube/TikTok/Instagram/Spotify/Bilibili. Coba link lain ya.');
       } catch (e) { console.log('MINIAPP_Q_FAIL chat=' + cid + ' err=' + e.message); }
     }
   } finally {
