@@ -19,6 +19,7 @@
 const fs = require('fs');
 const path = require('path');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, fetchLatestWaWebVersion } = require('@whiskeysockets/baileys');
+const QRCode = require('qrcode');
 const { videoChain, audioChain, spotifyChain, classifyError } = require('./routes');
 const { validateMediaUrl, downloadUrlFile, MAX_BYTES } = require('./downloader');
 
@@ -56,6 +57,8 @@ let sockDead = false;
 let reconnectTimer = null;
 let startupCodeDone = false;
 let codeInFlight = false;
+let latestQr = null;
+let qrSending = false;
 
 // Anti-spam WA: 1 download per pengirim + maks 5 barengan (sama seperti Telegram).
 const busyWa = new Set();
@@ -100,7 +103,9 @@ function createSocket() {
 async function onConnectionUpdate(s, u) {
   if (u.qr && !qrSeen) {
     qrSeen = true;
+    latestQr = u.qr;
     console.log('WA_QR_READY: server mengirim pair-device (mode REGISTRATION ok)');
+    sendQrToOwner(u.qr);
   }
   if (u.isNewLogin) {
     linked = true;
@@ -138,6 +143,8 @@ async function onConnectionUpdate(s, u) {
 // Dipakai startup (sekali per run) dan /pairwa (manual). TIDAK pernah
 // dipanggil otomatis saat reconnect.
 async function requestPairingCodeOnce() {
+  // Mode QR aktif — pairing code dimatikan (fungsi ini tidak pernah dipanggil lagi).
+  return { ok: false, error: 'mode QR aktif' };
   if (codeInFlight) return { ok: false, error: 'masih diproses' };
   if (!WA_NUMBER) return { ok: false, error: 'WA_NUMBER tidak diset' };
   if (authState && authState.creds.registered) return { ok: false, error: 'sudah terhubung' };
@@ -157,7 +164,7 @@ async function requestPairingCodeOnce() {
         if (!sock || sockDead) continue;
       }
       try {
-        code = await sock.requestPairingCode(WA_NUMBER);
+        throw new Error('mode QR aktif');
       } catch (e) {
         lastErr = e;
         console.log('WA_PAIRING_TRY ' + attempt + ' FAIL: ' + (e && e.message ? e.message : e));
@@ -169,6 +176,22 @@ async function requestPairingCodeOnce() {
     return { ok: true, code };
   } finally {
     codeInFlight = false;
+  }
+}
+
+async function sendQrToOwner(qrStr) {
+  if (!tgBot || !ownerId) { console.log('WA_QR (tidak ada Telegram owner): QR tidak terkirim'); return; }
+  if (qrSending) return;
+  qrSending = true;
+  try {
+    const buf = await QRCode.toBuffer(qrStr, { type: 'png', width: 512, margin: 1 });
+    const caption = 'QR WhatsApp (bot downloader) — scan di WA nomor ' + WA_NUMBER + ' \u2192 Pengaturan \u2192 Perangkat Tertaut \u2192 Tautkan Perangkat.\nQR cepat kedaluwarsa — pakai QR terbaru (tiap siklus QR baru). Kalau kedaluwarsa, kirim /pairwa di sini.';
+    await tgBot.sendPhoto(ownerId, buf, { caption: caption });
+    console.log('WA_QR_SENT_TO_OWNER');
+  } catch (e) {
+    console.log('WA_QR_SEND_FAIL: ' + e.message);
+  } finally {
+    qrSending = false;
   }
 }
 
@@ -212,27 +235,18 @@ async function startWA(opts) {
   }
   await initAuth();
   sock = createSocket();
-  if (!linked && !startupCodeDone) {
-    startupCodeDone = true;
-    requestPairingCodeOnce().then((res) => {
-      if (res.ok) sendCodeToOwner(res.code);
-      else console.log('WA_PAIRING_GIVEUP: ' + res.error);
-    }).catch((e) => console.log('WA_PAIRING_GIVEUP: ' + e.message));
-  }
+  if (!linked) console.log('WA_QR_MODE: pairing via QR — QR dikirim ke owner tiap siklus baru');
   return { ok: true, registered: linked };
 }
 
-// Dipanggil /pairwa (Telegram, owner saja): minta kode pairing BARU kapan pun.
+// /pairwa (Telegram, owner saja): kirim ulang QR terbaru (mode QR — pairing code dimatikan).
 async function requestPairingCodeNow() {
   if (!WA_NUMBER) return { ok: false, error: 'WA_NUMBER tidak diset di env Altare' };
   if (authState && authState.creds.registered) return { ok: false, error: 'WA sudah terhubung' };
-  if (!sock) {
-    try {
-      await initAuth();
-      sock = createSocket();
-    } catch (e) { return { ok: false, error: e.message }; }
-  }
-  return requestPairingCodeOnce();
+  if (!sock || sockDead) return { ok: false, error: 'socket WA lagi reconnect — tunggu sebentar lalu /pairwa lagi' };
+  if (!latestQr) return { ok: false, error: 'belum ada QR — tunggu sebentar lalu /pairwa lagi' };
+  await sendQrToOwner(latestQr);
+  return { ok: true, qr: true };
 }
 
 function waKey(jid) { return 'wa_' + String(jid).replace(/[^0-9a-z]/gi, '_'); }

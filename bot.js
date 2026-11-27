@@ -139,10 +139,10 @@ bot.onText(/\/pairwa/, async (msg) => {
   const st = wa.getWAStatus();
   if (st.registered) return bot.sendMessage(msg.chat.id, 'WA sudah terhubung, tidak perlu pairing.');
   if (!st.numberSet) return bot.sendMessage(msg.chat.id, 'WA_NUMBER belum diset di env Altare — isi dulu, lalu /pairwa lagi.');
-  bot.sendMessage(msg.chat.id, '⏳ Minta kode pairing WA…');
+  bot.sendMessage(msg.chat.id, '⏳ Kirim QR WA terbaru…');
   const r = await wa.requestPairingCodeNow().catch((e) => ({ ok: false, error: e.message }));
-  if (r && r.ok) return bot.sendMessage(msg.chat.id, 'Kode pairing WA: ' + r.code + '\nMasukkan di WA → Perangkat Tertaut → Tautkan Perangkat → "Tautkan dengan nomor telepon". Kode cepat kedaluwarsa, langsung dimasukkan ya.');
-  bot.sendMessage(msg.chat.id, '❌ Gagal minta kode pairing: ' + (r.error || 'tidak diketahui') + '. Cek log Altare.');
+  if (r && r.ok) return bot.sendMessage(msg.chat.id, 'QR WA terbaru dikirim di atas. Scan di WA → Perangkat Tertaut → Tautkan Perangkat. QR cepat kedaluwarsa, langsung scan ya.');
+  bot.sendMessage(msg.chat.id, '❌ Belum ada QR: ' + (r.error || 'tidak diketahui') + '. Tunggu sebentar lalu /pairwa lagi.');
 });
 bot.onText(/\/saldo/, (msg) => {
   bot.sendMessage(msg.chat.id, '💎 Download sekarang GRATIS, nggak perlu token lagi. Kirim link videonya aja.');
