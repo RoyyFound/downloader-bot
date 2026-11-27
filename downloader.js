@@ -351,7 +351,7 @@ function checkYtDlp() {
 
 function isVideoUrl(text) {
   if (!text || typeof text !== 'string') return false;
-  return /(tiktok\.com|vt\.tiktok\.com|youtube\.com|youtu\.be|instagram\.com|bilibili\.tv|bilibili\.com)\/\S+/i.test(text.trim());
+  return /(tiktok\.com|vt\.tiktok\.com|youtube\.com|youtu\.be|instagram\.com|bilibili\.tv|bilibili\.com|bili\.im|b23\.tv)\/\S+/i.test(text.trim());
 }
 
 function platformOf(text) {
@@ -360,6 +360,7 @@ function platformOf(text) {
   if (/youtube\.com|youtu\.be/i.test(text)) return 'youtube';
   if (/instagram\.com/i.test(text)) return 'instagram';
   if (/bilibili\.tv|bilibili\.com/i.test(text)) return 'bilibili';
+  if (/bili\.im|b23\.tv/i.test(text)) return 'bilibili';
   return null;
 }
 
@@ -375,6 +376,7 @@ const ALLOWED_HOSTS = new Set([
   'music.youtube.com',
   'instagram.com', 'www.instagram.com',
   'bilibili.tv', 'www.bilibili.tv', 'bilibili.com', 'www.bilibili.com', 'm.bilibili.com',
+  'bili.im', 'b23.tv',
   'open.spotify.com',
 ]);
 function isPrivateIp(host) {
@@ -402,6 +404,7 @@ function validateMediaUrl(text) {
   else if (/youtube\.com$/.test(host) || host === 'youtu.be') platform = 'youtube';
   else if (/instagram\.com$/.test(host)) platform = 'instagram';
   else if (/bilibili\.(tv|com)$/.test(host)) platform = 'bilibili';
+  else if (host === 'bili.im' || host === 'b23.tv') platform = 'bilibili';
   else if (host === 'open.spotify.com') platform = 'spotify';
   return { ok: true, platform, url: u.toString() };
 }

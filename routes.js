@@ -35,6 +35,7 @@
 //     Mode URL TIDAK dipakai — stream Bilibili DASH video-only + audio-only,
 //     extractDirect cuma dapat video tanpa suara. Dari VM Muse ke-block geo
 //     (Bstation cuma SEA), dari VMOS Hongkong lolos (format s.d. 720p).
+//     Link pendek bili.im / b23.tv ikut didukung (redirect ke bilibili.tv/com).
 // Mati / tidak terverifikasi (TIDAK dipakai):
 //   cobalt API publik — sekarang minta JWT (error.api.auth.jwt.missing);
 //     jalur ada di kode tapi NONAKTIF kecuali env COBALT_API_KEY diset.
