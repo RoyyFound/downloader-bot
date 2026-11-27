@@ -69,6 +69,7 @@ const MENU_KB = {
     inline_keyboard: [
       [{ text: 'DOWNLOAD TIKTOK', callback_data: 'dl_tiktok', style: 'primary' }, { text: 'DOWNLOAD YT', callback_data: 'dl_yt', style: 'danger' }],
       [{ text: 'DOWNLOAD IG', callback_data: 'dl_ig', style: 'success' }, { text: 'DOWNLOAD SPOTIFY 🎵', callback_data: 'dl_spotify', style: 'success' }],
+      [{ text: '💬 Support', url: 'https://t.me/RoyyFound' }],
     ],
   },
 };
